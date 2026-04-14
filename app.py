@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 from database.db import init_db
-from reviews_warnings import (
+from alisha.reviews_warnings import (
     submit_review, get_course_reviews,
     file_complaint, get_pending_complaints, resolve_complaint,
     get_taboo_words, add_taboo_word, remove_taboo_word,
