@@ -7,7 +7,14 @@ from alisha.reviews_warnings import (
     get_user_warnings, get_warning_count, issue_warning
 )
 
+from jinja2 import ChoiceLoader, FileSystemLoader
+
 app = Flask(__name__)
+app.jinja_loader = ChoiceLoader([
+    FileSystemLoader('templates'),
+    FileSystemLoader('alisha/templates'),
+])
+
 app.secret_key = 'college0secretkey'  # needed for sessions (keeping users logged in)
 
 # initialize the database when the app starts
