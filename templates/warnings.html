@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - Warnings</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
+        .container { padding: 40px; }
+        .box {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 25px;
+        }
+        h2 { color: #2E4A7A; }
+        .warning-card {
+            border-left: 4px solid #e74c3c;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #fff5f5;
+            border-radius: 5px;
+        }
+        .warning-card p { margin: 5px 0; }
+        .count-box {
+            font-size: 18px;
+            font-weight: bold;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .safe { background: #d4edda; color: #155724; }
+        .caution { background: #fff3cd; color: #856404; }
+        .danger { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>College0 - My Warnings</h1>
+        <div>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="box">
+            <h2>Warning Summary for {{ username }}</h2>
+            <div class="count-box {{ 'danger' if count >= 3 else 'caution' if count >= 2 else 'safe' }}">
+                Total Warnings: {{ count }} / 3
+                {% if count >= 3 %}
+                    — You have been suspended!
+                {% elif count == 2 %}
+                    — One more warning results in suspension!
+                {% else %}
+                    — You are in good standing.
+                {% endif %}
+            </div>
+
+            {% if warnings %}
+                {% for warning in warnings %}
+                <div class="warning-card">
+                    <p><strong>Reason:</strong> {{ warning['reason'] }}</p>
+                    <p><strong>Date:</strong> {{ warning['created_at'] }}</p>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p>You have no warnings. Keep up the good work!</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
