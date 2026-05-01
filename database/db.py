@@ -10,6 +10,9 @@ def get_db():
     conn.row_factory = sqlite3.Row  # lets you access columns by name e.g. row['email']
     return conn
 
+# alias so Alisha's code works too
+get_connection = get_db
+
 
 def init_db():
     conn = get_db()
