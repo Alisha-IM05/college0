@@ -35,6 +35,15 @@ CREATE TABLE IF NOT EXISTS applications (
 -- TANZINA — Semester & Course Management Tables
 -- ============================================================
 
+CREATE TABLE IF NOT EXISTS students (
+    id INTEGER PRIMARY KEY,
+    semester_gpa REAL DEFAULT 0.0,
+    cumulative_gpa REAL DEFAULT 0.0,
+    honor_roll INTEGER DEFAULT 0,
+    credits_earned INTEGER DEFAULT 0,
+    FOREIGN KEY (id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS semesters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
