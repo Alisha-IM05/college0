@@ -28,13 +28,14 @@ def seed_data():
 
     # --- Zhuolin's users ---
     users = [
-        ("registrar1", "password", "registrar", "active"),
-        ("student1",   "password", "student",   "active"),
-        ("student2",   "password", "student",   "active"),
-        ("instructor1","password", "instructor", "active"),
-        ("instructor2","password", "instructor", "active"),
+        ("registrar1",  "registrar1@college0.edu",  "password", "registrar",  "active"),
+        ("student1",    "student1@college0.edu",    "password", "student",    "active"),
+        ("student2",    "student2@college0.edu",    "password", "student",    "active"),
+        ("instructor1", "instructor1@college0.edu", "password", "instructor", "active"),
+        ("instructor2", "instructor2@college0.edu", "password", "instructor", "active"),
     ]
-    for email, password, role, status in users:
+
+    for username, email, password, role, status in users:
         conn.execute(
             "INSERT OR IGNORE INTO users (email, password, role, status) VALUES (?, ?, ?, ?)",
             (email, password, role, status)
