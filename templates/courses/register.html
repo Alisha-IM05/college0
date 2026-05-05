@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - Course Registration</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
+        .container { padding: 40px; }
+        .message {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #155724;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        th {
+            background: #2E4A7A;
+            color: white;
+            padding: 12px 16px;
+            text-align: left;
+        }
+        td { padding: 12px 16px; border-bottom: 1px solid #eee; }
+        tr:last-child td { border-bottom: none; }
+        .btn {
+            background: #2E4A7A;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .btn:hover { background: #1a3158; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>College0</h1>
+        <div>
+            <span>Welcome, {{ username }}</span>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Course Registration</h2>
+
+        {% if message %}
+        <div class="message">{{ message }}</div>
+        {% endif %}
+
+        <table>
+            <tr>
+                <th>Course</th>
+                <th>Time Slot</th>
+                <th>Spots Available</th>
+                {% if role == 'student' %}
+                <th>Action</th>
+                {% endif %}
+            </tr>
+            {% for course in courses %}
+            <tr>
+                <td>{{ course['course_name'] }}</td>
+                <td>{{ course['time_slot'] }}</td>
+                <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
+                {% if role == 'student' %}
+                <td>
+                    <form method="POST" action="/courses/register/{{ course['id'] }}">
+                        <button class="btn" type="submit">Register</button>
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>

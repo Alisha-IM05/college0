@@ -10,6 +10,8 @@ from modules.conduct import (
     get_user_warnings, get_warning_count, issue_warning
 )
 
+from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
+
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
@@ -29,7 +31,7 @@ def create_test_users():
     test_users = [
         ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
         ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('student1',   'student1@college0.com',   'password123', 'student'),
+        ('student1', 'student1@college0.com', 'password123', 'student'),
         ('student2',   'student2@college0.com',   'password123', 'student'),
     ]
     for username, email, password, role in test_users:
@@ -41,19 +43,6 @@ def create_test_users():
         except:
             pass  # user already exists, skip
 
-    # create a test course (until Tanzina builds course setup)
-    try:
-        conn.execute(
-            "INSERT INTO courses (semester_id, course_name, instructor_id, time_slot, capacity) VALUES (?, ?, ?, ?, ?)",
-            (1, 'Introduction to Computer Science', 2, 'Mon/Wed 10:00-11:30', 30)
-        )
-        # enroll student1 in the course
-        conn.execute(
-            "INSERT INTO enrollments (student_id, course_id) VALUES (?, ?)",
-            (3, 1)
-        )
-    except:
-        pass
 
     conn.commit()
     conn.close()
@@ -102,6 +91,48 @@ def dashboard():
     return render_template('dashboard.html',
                            username=session['username'],
                            role=session['role'])
+    
+    
+
+# ── COURSES / REGISTRATION ────────────────────────────────────────────────────
+
+@app.route('/courses/register')
+def course_registration():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    print("ROLE:", session['role'])  # ← add this line
+    print("USER:", session['username'])  # ← and this
+
+    
+    conn = get_db()
+    courses = conn.execute(
+        "SELECT * FROM courses WHERE status = 'active'"
+    ).fetchall()
+    conn.close()
+    
+    return render_template('courses/register.html',
+                           courses=courses,
+                           role=session['role'],
+                           username=session['username'])
+
+@app.route('/courses/register/<int:course_id>', methods=['POST'])
+def register_for_course(course_id):
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    
+    message = register_student(session['user_id'], course_id)
+    
+    conn = get_db()
+    courses = conn.execute(
+        "SELECT * FROM courses WHERE status = 'active'"
+    ).fetchall()
+    conn.close()
+    
+    return render_template('courses/register.html',
+                           courses=courses,
+                           role=session['role'],
+                           username=session['username'],
+                           message=message)
 
 
 # ── REVIEWS ───────────────────────────────────────────────────────────────────
