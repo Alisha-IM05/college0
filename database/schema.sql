@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,      -- used for login
     email TEXT UNIQUE NOT NULL,         -- used for contact/application
     password TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('student', 'instructor', 'registrar', 'suspended', 'terminated')),
+    role TEXT NOT NULL CHECK(role IN ('student', 'instructor', 'registrar', 'suspended', 'terminated', 'graduated')),
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'terminated')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
