@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - Class Detail</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
+        .container { padding: 40px; }
+        h2 { color: #2E4A7A; }
+        h3 { color: #2E4A7A; margin-top: 30px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 30px;
+        }
+        th {
+            background: #2E4A7A;
+            color: white;
+            padding: 12px 16px;
+            text-align: left;
+        }
+        td { padding: 12px 16px; border-bottom: 1px solid #eee; }
+        tr:last-child td { border-bottom: none; }
+        .btn {
+            background: #2E4A7A;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        select {
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>College0</h1>
+        <div>
+            <span>Welcome, {{ username }}</span>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>{{ course['course_name'] }}</h2>
+        <p>Time Slot: {{ course['time_slot'] }} | Capacity: {{ course['capacity'] }}</p>
+
+        <h3>Enrolled Students</h3>
+        <table>
+            <tr>
+                <th>Student</th>
+                <th>Grade</th>
+                {% if role == 'instructor' %}
+                <th>Submit Grade</th>
+                {% endif %}
+            </tr>
+            {% for student in enrolled %}
+            <tr>
+                <td>{{ student['username'] }}</td>
+                <td>{{ student['letter_grade'] or 'Not graded' }}</td>
+                {% if role == 'instructor' %}
+                <td>
+                    <form method="POST" action="/courses/{{ course['id'] }}/grade">
+                        <input type="hidden" name="student_id" value="{{ student['id'] }}">
+                        <select name="letter_grade">
+                            <option>A</option>
+                            <option>B</option>
+                            <option>C</option>
+                            <option>D</option>
+                            <option>F</option>
+                        </select>
+                        <button class="btn" type="submit">Submit</button>
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </table>
+
+        {% if role == 'instructor' and waitlist %}
+        <h3>Waitlist</h3>
+        <table>
+            <tr>
+                <th>Position</th>
+                <th>Student</th>
+                <th>Action</th>
+            </tr>
+            {% for student in waitlist %}
+            <tr>
+                <td>{{ student['position'] }}</td>
+                <td>{{ student['username'] }}</td>
+                <td>
+                    <form method="POST" action="/courses/{{ course['id'] }}/admit">
+                        <input type="hidden" name="student_id" value="{{ student['id'] }}">
+                        <button class="btn" type="submit">Admit</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+    </div>
+</body>
+</html>
