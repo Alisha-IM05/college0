@@ -135,6 +135,67 @@ def register_for_course(course_id):
                            message=message)
 
 
+# ── CLASS DETAIL (instructor) ─────────────────────────────────────────────────
+
+@app.route('/courses/<int:course_id>')
+def class_detail(course_id):
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    
+    conn = get_db()
+    course = conn.execute(
+        "SELECT * FROM courses WHERE id = ?", (course_id,)
+    ).fetchone()
+    
+    enrolled = conn.execute(
+        """SELECT u.id, u.username, g.letter_grade 
+           FROM enrollments e
+           JOIN users u ON e.student_id = u.id
+           LEFT JOIN grades g ON g.student_id = u.id AND g.course_id = ?
+           WHERE e.course_id = ? AND e.status = 'enrolled'""",
+        (course_id, course_id)
+    ).fetchall()
+    
+    waitlist = conn.execute(
+        """SELECT u.id, u.username, w.position
+           FROM waitlist w
+           JOIN users u ON w.student_id = u.id
+           WHERE w.course_id = ?
+           ORDER BY w.position""",
+        (course_id,)
+    ).fetchall()
+    
+    conn.close()
+    
+    return render_template('courses/class_detail.html',
+                           course=course,
+                           enrolled=enrolled,
+                           waitlist=waitlist,
+                           role=session['role'],
+                           username=session['username'])
+
+
+@app.route('/courses/<int:course_id>/grade', methods=['POST'])
+def submit_grade_route(course_id):
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    
+    student_id = int(request.form['student_id'])
+    letter_grade = request.form['letter_grade']
+    message = submit_grade(session['user_id'], student_id, course_id, letter_grade)
+    return redirect(url_for('class_detail', course_id=course_id))
+
+
+@app.route('/courses/<int:course_id>/admit', methods=['POST'])
+def admit_waitlist_route(course_id):
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    
+    student_id = int(request.form['student_id'])
+    message = admit_from_waitlist(course_id, student_id)
+    return redirect(url_for('class_detail', course_id=course_id))
+
+
 # ── REVIEWS ───────────────────────────────────────────────────────────────────
 
 @app.route('/reviews/<int:course_id>')
