@@ -279,8 +279,12 @@ def admit_from_waitlist(course_id, student_id):
             (course_id,)
         ).fetchone()
         # Check if there is space in the course
-        if course['enrolled_count'] >= course['capacity']:
-            return 'No seats available in this course'
+        # Instructors can override capacity for waitlisted students
+        # capacity increases by 1 to accommodate the admitted student
+        conn.execute(
+            "UPDATE courses SET capacity = capacity + 1 WHERE id = ?",
+            (course_id,)
+        )
         # Check if the student is on the waitlist
         waitlist_entry = conn.execute(
             "SELECT * FROM waitlist WHERE student_id = ? AND course_id = ?",
@@ -661,6 +665,10 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
                     student_id,
                     'GPA between 2.0 and 2.25 — probation interview required'
                 )
+            )
+            conn.execute(
+                "UPDATE users SET status = 'probation' WHERE id = ?",
+                (student_id,)
             )
         # Count how many semesters this student has grades for
         semester_count = conn.execute(

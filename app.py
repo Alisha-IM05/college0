@@ -40,8 +40,15 @@ def create_test_users():
                 "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)",
                 (username, email, password, role)
             )
+            if role == 'student':
+                user = conn.execute(
+                    "SELECT id FROM users WHERE username = ?", (username,)
+                ).fetchone()
+                conn.execute(
+                    "INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],)
+                )
         except:
-            pass  # user already exists, skip
+            pass
 
 
     conn.commit()
@@ -96,7 +103,11 @@ def dashboard():
     grades = None
     if session['role'] == 'student':
         student_data = conn.execute(
-            "SELECT * FROM users WHERE id = ?", (session['user_id'],)
+            """SELECT u.*, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
+               FROM users u
+               LEFT JOIN students s ON u.id = s.id
+               WHERE u.id = ?""",
+            (session['user_id'],)
         ).fetchone()
         grades = conn.execute(
             """SELECT g.letter_grade, g.numeric_value, c.course_name, s.name as semester_name
@@ -463,6 +474,26 @@ def admit_waitlist_route(course_id):
     
     student_id = int(request.form['student_id'])
     message = admit_from_waitlist(course_id, student_id)
+    return redirect(url_for('class_detail', course_id=course_id))
+@app.route('/courses/<int:course_id>/reject', methods=['POST'])
+def reject_waitlist_route(course_id):
+    if 'user_id' not in session or session['role'] != 'instructor':
+        return redirect(url_for('home'))
+    student_id = int(request.form['student_id'])
+    conn = get_db()
+    # Remove from waitlist
+    conn.execute(
+        "DELETE FROM waitlist WHERE student_id = ? AND course_id = ?",
+        (student_id, course_id)
+    )
+    # Issue notification via warning
+    course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+    conn.execute(
+        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+        (student_id, f'Your waitlist request for {course["course_name"]} was rejected by the instructor')
+    )
+    conn.commit()
+    conn.close()
     return redirect(url_for('class_detail', course_id=course_id))
 
 

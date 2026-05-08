@@ -136,12 +136,12 @@
                         <div style="color:#888;font-size:13px;">Credits Earned</div>
                     </div>
                 </div>
-                {% if student_data['academic_standing'] == 'honor_roll' %}
+                    {% if student_data['honor_roll'] and student_data['honor_roll'] > 0 and (student_data['semester_gpa'] > 3.75 or student_data['cumulative_gpa'] > 3.5) %}
                     <div style="background:#ffd700;color:#333;padding:8px 16px;border-radius:6px;font-weight:bold;">🏆 Honor Roll</div>
-                {% elif student_data['academic_standing'] == 'probation' %}
-                    <div style="background:#fff3cd;color:#856404;padding:8px 16px;border-radius:6px;font-weight:bold;">⚠️ Academic Probation</div>
-                {% elif student_data['academic_standing'] == 'terminated' %}
-                    <div style="background:#f8d7da;color:#721c24;padding:8px 16px;border-radius:6px;font-weight:bold;">❌ Terminated</div>
+                {% elif student_data['status'] == 'probation' %}
+                    <div style="background:#fff3cd;color:#856404;padding:8px 16px;border-radius:6px;font-weight:bold;">⚠️ Academic Probation — Your GPA must improve above 2.25</div>
+                {% elif student_data['status'] == 'terminated' %}
+                    <div style="background:#f8d7da;color:#721c24;padding:8px 16px;border-radius:6px;font-weight:bold;">❌ Your enrollment has been terminated due to academic performance (GPA below 2.0 or failed the same course twice). Please contact the registrar.</div>
                 {% else %}
                     <div style="background:#d4edda;color:#155724;padding:8px 16px;border-radius:6px;font-weight:bold;">✅ Good Standing</div>
                 {% endif %}
