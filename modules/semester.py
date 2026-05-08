@@ -524,6 +524,31 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
         conn.commit()
         # Recalculate GPA after saving the grade
         calculate_gpa(student_id)
+
+        # Flag instructor if class GPA is above 3.5 or below 2.5
+        class_gpa = conn.execute(
+            """
+            SELECT AVG(g.numeric_value) as avg_gpa
+            FROM grades g
+            WHERE g.course_id = ?
+            """,
+            (course_id,)
+        ).fetchone()['avg_gpa']
+
+        if class_gpa is not None:
+            if class_gpa > 3.5 or class_gpa < 2.5:
+                conn.execute(
+                    """
+                    INSERT INTO warnings (user_id, reason)
+                    VALUES (?, ?)
+                    """,
+                    (
+                        instructor_id,
+                        f'Your course GPA of {class_gpa:.2f} has been flagged for registrar review (outside 2.5–3.5 range)'
+                    )
+                )
+                conn.commit()
+
         return 'Grade submitted successfully'
     finally:
         conn.close()
