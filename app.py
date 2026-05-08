@@ -92,11 +92,28 @@ def dashboard():
     semester = conn.execute(
         "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
     ).fetchone()
+    student_data = None
+    grades = None
+    if session['role'] == 'student':
+        student_data = conn.execute(
+            "SELECT * FROM users WHERE id = ?", (session['user_id'],)
+        ).fetchone()
+        grades = conn.execute(
+            """SELECT g.letter_grade, g.numeric_value, c.course_name, s.name as semester_name
+               FROM grades g
+               JOIN courses c ON g.course_id = c.id
+               JOIN semesters s ON c.semester_id = s.id
+               WHERE g.student_id = ?
+               ORDER BY s.id DESC""",
+            (session['user_id'],)
+        ).fetchall()
     conn.close()
     return render_template('dashboard.html',
                            username=session['username'],
                            role=session['role'],
-                           semester=semester)
+                           semester=semester,
+                           student_data=student_data,
+                           grades=grades)
     
     
 #start of Tanzina's code
@@ -122,6 +139,14 @@ def course_registration():
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    waitlisted = conn.execute(
+        """SELECT w.*, c.course_name, c.time_slot
+           FROM waitlist w
+           JOIN courses c ON w.course_id = c.id
+           WHERE w.student_id = ?
+           ORDER BY w.course_id""",
+        (session['user_id'],)
+    ).fetchall()
     conn.close()
     
     return render_template('courses/register.html',
@@ -129,7 +154,8 @@ def course_registration():
                            semester=semester,
                            enrolled=enrolled,
                            role=session['role'],
-                           username=session['username'])
+                           username=session['username'],
+                           waitlisted=waitlisted)
 @app.route('/instructor/courses')
 def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -174,6 +200,14 @@ def register_for_course(course_id):
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    waitlisted = conn.execute(
+        """SELECT w.*, c.course_name, c.time_slot
+           FROM waitlist w
+           JOIN courses c ON w.course_id = c.id
+           WHERE w.student_id = ?
+           ORDER BY w.course_id""",
+        (session['user_id'],)
+    ).fetchall()
     conn.close()
     
     return render_template('courses/register.html',
@@ -182,7 +216,25 @@ def register_for_course(course_id):
                            enrolled=enrolled,
                            role=session['role'],
                            username=session['username'],
-                           message=message)
+                           message=message,
+                           waitlisted=waitlisted)
+
+@app.route('/courses/drop/<int:course_id>', methods=['POST'])
+def drop_course(course_id):
+    if 'user_id' not in session or session['role'] != 'student':
+        return redirect(url_for('home'))
+    conn = get_db()
+    conn.execute(
+        "UPDATE enrollments SET status = 'cancelled' WHERE student_id = ? AND course_id = ?",
+        (session['user_id'], course_id)
+    )
+    conn.execute(
+        "UPDATE courses SET enrolled_count = enrolled_count - 1 WHERE id = ?",
+        (course_id,)
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for('course_registration'))
 # ── SEMESTER MANAGEMENT (registrar) ──────────────────────────────────────────
 
 @app.route('/semester')
@@ -264,7 +316,8 @@ def create_course_page():
 def create_course_route():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
-    name = request.form['name']
+    course_id = request.form['course_id']
+    name = request.form['course_id'] + ' - ' + request.form['name']    
     instructor_id = int(request.form['instructor_id'])
     schedule = request.form['schedule']
     capacity = int(request.form['capacity'])
@@ -316,7 +369,11 @@ def graduation_resolve_page():
         return redirect(url_for('home'))
     conn = get_db()
     applications = conn.execute(
-        """SELECT ga.*, u.username FROM graduation_applications ga
+        """SELECT ga.*, u.username, 
+           (SELECT COUNT(*) FROM grades g 
+            JOIN enrollments e ON g.student_id = e.student_id AND g.course_id = e.course_id
+            WHERE g.student_id = ga.student_id AND g.letter_grade != 'F') as credits_earned
+           FROM graduation_applications ga
            JOIN users u ON ga.student_id = u.id
            WHERE ga.status = 'pending'"""
     ).fetchall()
@@ -331,7 +388,16 @@ def graduation_resolve_route(student_id):
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     decision = request.form['decision']  # 'approved' or 'rejected'
-    message = resolve_graduation(student_id, decision)
+    conn = get_db()
+    application = conn.execute(
+        "SELECT * FROM graduation_applications WHERE student_id = ? AND status = 'pending'",
+        (student_id,)
+    ).fetchone()
+    conn.close()
+    if application:
+        message = resolve_graduation(application['id'], decision == 'approved')
+    else:
+        message = 'No pending application found for this student'
     return redirect(url_for('graduation_resolve_page'))
 
 #End of Tanzina's code

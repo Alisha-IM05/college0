@@ -148,9 +148,15 @@ def register_student(student_id, course_id):
             """,
             (student_id,)
         ).fetchone()['count']
-        # Check max course limit (4)
-        if enrolled_count >= 4:
-            return 'Student has reached the maximum of 4 courses'
+        # Count waitlisted courses too
+        waitlist_count = conn.execute(
+            """SELECT COUNT(*) as count FROM waitlist
+               WHERE student_id = ?""",
+            (student_id,)
+        ).fetchone()['count']
+        # Check max course limit (4) — enrolled + waitlisted combined
+        if enrolled_count + waitlist_count >= 4:
+            return 'Student has reached the maximum of 4 courses (enrolled + waitlisted combined)'
         # Check if student has taken this course before
         past_grade = conn.execute(
             "SELECT * FROM grades WHERE student_id = ? AND course_id = ?",
