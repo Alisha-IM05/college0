@@ -160,17 +160,29 @@ def register_for_course(course_id):
     message = register_student(session['user_id'], course_id)
     
     conn = get_db()
+    semester = conn.execute(
+        "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     courses = conn.execute(
-        "SELECT * FROM courses WHERE status = 'active'"
+        "SELECT * FROM courses WHERE status = 'active' AND semester_id = ?",
+        (semester['id'],)
+    ).fetchall()
+    enrolled = conn.execute(
+        """SELECT c.* FROM enrollments e
+           JOIN courses c ON e.course_id = c.id
+           WHERE e.student_id = ? AND e.status = 'enrolled'
+           AND c.semester_id = ?""",
+        (session['user_id'], semester['id'])
     ).fetchall()
     conn.close()
     
     return render_template('courses/register.html',
                            courses=courses,
+                           semester=semester,
+                           enrolled=enrolled,
                            role=session['role'],
                            username=session['username'],
                            message=message)
-
 # ── SEMESTER MANAGEMENT (registrar) ──────────────────────────────────────────
 
 @app.route('/semester')
