@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create New Course</h2>
+
+{% if message %}
+  <p><strong>{{ message }}</strong></p>
+{% endif %}
+
+<form method="POST" action="/courses/create">
+  <label>Course Name:<br>
+    <input type="text" name="name" required>
+  </label><br><br>
+
+  <label>Instructor:<br>
+    <select name="instructor_id" required>
+      {% for instructor in instructors %}
+        <option value="{{ instructor['id'] }}">{{ instructor['username'] }}</option>
+      {% endfor %}
+    </select>
+  </label><br><br>
+
+  <label>Schedule (e.g. Mon/Wed 10:00-11:30):<br>
+    <input type="text" name="schedule" required>
+  </label><br><br>
+
+  <label>Capacity:<br>
+    <input type="number" name="capacity" required>
+  </label><br><br>
+
+  <label>Semester:<br>
+    <select name="semester_id" required>
+      {% for sem in semesters %}
+        <option value="{{ sem['id'] }}">{{ sem['name'] }} ({{ sem['current_period'] }})</option>
+      {% endfor %}
+    </select>
+  </label><br><br>
+
+  <button type="submit">Create Course</button>
+</form>
+{% endblock %}

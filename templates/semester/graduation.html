@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Graduation Applications</h2>
+
+{% if applications %}
+  <table border="1" cellpadding="8">
+    <tr>
+      <th>Student</th>
+      <th>Applied At</th>
+      <th>Action</th>
+    </tr>
+    {% for app in applications %}
+    <tr>
+      <td>{{ app['username'] }}</td>
+      <td>{{ app['applied_at'] }}</td>
+      <td>
+        <form method="POST" action="/graduation/resolve/{{ app['student_id'] }}">
+          <button type="submit" name="decision" value="approved">Approve</button>
+          <button type="submit" name="decision" value="rejected">Reject</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <p>No pending graduation applications.</p>
+{% endif %}
+{% endblock %}

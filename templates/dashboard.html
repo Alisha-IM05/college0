@@ -95,6 +95,39 @@
                 <h3>🚫 Taboo Words</h3>
                 <p>Manage the list of banned words.</p>
             </a>
+            <a class="card" href="/semester">
+                <h3>📅 Semester Management</h3>
+                <p>Advance the semester period.</p>
+            </a>
+            <a class="card" href="/courses/create">
+                <h3>➕ Create Course</h3>
+                <p>Add a new course to the system.</p>
+            </a>
+            <a class="card" href="/graduation/resolve">
+                <h3>🎓 Graduation Applications</h3>
+                <p>Review and resolve student graduation requests.</p>
+            </a>
+            {% endif %}
+
+            {% if role == 'student' %}
+            <a class="card" href="/courses/register">
+                <h3>📚 Course Registration</h3>
+                <p>Browse and register for available courses.</p>
+            </a>
+            <div class="card">
+                <h3>🎓 Apply for Graduation</h3>
+                <p>Submit your graduation application.</p>
+                <form method="POST" action="/graduation/apply">
+                    <button type="submit" style="background:#2E4A7A;color:white;border:none;padding:8px 16px;border-radius:5px;cursor:pointer;">Apply</button>
+                </form>
+            </div>
+            {% endif %}
+
+            {% if role == 'instructor' %}
+            <a class="card" href="/courses/register">
+                <h3>📚 My Courses</h3>
+                <p>View your courses and manage students.</p>
+            </a>
             {% endif %}
         </div>
     </div>

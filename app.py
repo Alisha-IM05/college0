@@ -93,15 +93,15 @@ def dashboard():
                            role=session['role'])
     
     
-
+#start of Tanzina's code
 # ── COURSES / REGISTRATION ────────────────────────────────────────────────────
 
 @app.route('/courses/register')
 def course_registration():
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    print("ROLE:", session['role'])  # ← add this line
-    print("USER:", session['username'])  # ← and this
+    print("ROLE:", session['role'])  
+    print("USER:", session['username'])  
 
     
     conn = get_db()
@@ -134,7 +134,108 @@ def register_for_course(course_id):
                            username=session['username'],
                            message=message)
 
+# ── SEMESTER MANAGEMENT (registrar) ──────────────────────────────────────────
 
+@app.route('/semester')
+def semester_management():
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    conn = get_db()
+    semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return render_template('semester/manage.html',
+                           semester=semester,
+                           role=session['role'],
+                           username=session['username'])
+
+@app.route('/semester/advance', methods=['POST'])
+def advance_semester():
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    semester_id = int(request.form['semester_id'])
+    message = advance_period(semester_id)
+    conn = get_db()
+    semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return render_template('semester/manage.html',
+                           semester=semester,
+                           role=session['role'],
+                           username=session['username'],
+                           message=message)
+
+
+# ── CREATE COURSE (registrar) ─────────────────────────────────────────────────
+
+@app.route('/courses/create')
+def create_course_page():
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    conn = get_db()
+    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
+    semesters   = conn.execute("SELECT * FROM semesters").fetchall()
+    conn.close()
+    return render_template('courses/create.html',
+                           instructors=instructors,
+                           semesters=semesters,
+                           role=session['role'],
+                           username=session['username'])
+
+@app.route('/courses/create', methods=['POST'])
+def create_course_route():
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    name        = request.form['name']
+    instructor_id = int(request.form['instructor_id'])
+    schedule    = request.form['schedule']
+    capacity    = int(request.form['capacity'])
+    semester_id = int(request.form['semester_id'])
+    message = create_course(name, instructor_id, schedule, capacity, semester_id)
+    conn = get_db()
+    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
+    semesters   = conn.execute("SELECT * FROM semesters").fetchall()
+    conn.close()
+    return render_template('courses/create.html',
+                           instructors=instructors,
+                           semesters=semesters,
+                           role=session['role'],
+                           username=session['username'],
+                           message=message)
+
+
+# ── GRADUATION ────────────────────────────────────────────────────────────────
+
+@app.route('/graduation/apply', methods=['POST'])
+def graduation_apply():
+    if 'user_id' not in session or session['role'] != 'student':
+        return redirect(url_for('home'))
+    message = apply_for_graduation(session['user_id'])
+    return redirect(url_for('dashboard') + f'?message={message}')
+
+@app.route('/graduation/resolve')
+def graduation_resolve_page():
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    conn = get_db()
+    applications = conn.execute(
+        """SELECT ga.*, u.username FROM graduation_applications ga
+           JOIN users u ON ga.student_id = u.id
+           WHERE ga.status = 'pending'"""
+    ).fetchall()
+    conn.close()
+    return render_template('semester/graduation.html',
+                           applications=applications,
+                           role=session['role'],
+                           username=session['username'])
+
+@app.route('/graduation/resolve/<int:student_id>', methods=['POST'])
+def graduation_resolve_route(student_id):
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    decision = request.form['decision']  # 'approved' or 'rejected'
+    message = resolve_graduation(student_id, decision)
+    return redirect(url_for('graduation_resolve_page'))
+
+#End of Tanzina's code
 # ── CLASS DETAIL (instructor) ─────────────────────────────────────────────────
 
 @app.route('/courses/<int:course_id>')

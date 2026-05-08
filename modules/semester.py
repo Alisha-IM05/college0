@@ -1,5 +1,5 @@
 # Semester & Course Management by Tanzina Sumona
-from db import get_db
+from database.db import get_db
 
 
 PERIOD_ORDER = ['setup', 'registration', 'running', 'grading']
