@@ -14,6 +14,11 @@
     <input type="hidden" name="semester_id" value="{{ semester['id'] }}">
     <button type="submit">Advance to Next Period</button>
   </form>
+  <br>
+  <form method="POST" action="/semester/retreat">
+    <input type="hidden" name="semester_id" value="{{ semester['id'] }}">
+    <button type="submit">← Go Back One Period</button>
+  </form>
 {% else %}
   <p>No semester found.</p>
 {% endif %}
