@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>College0</title>
+</head>
+<body>
+  <nav>
+    <a href="/dashboard">Dashboard</a> |
+    {% if session.get('role') == 'registrar' %}
+      <a href="/semester">Semester</a> |
+      <a href="/courses/create">Create Course</a> |
+      <a href="/graduation/resolve">Graduation</a> |
+      <a href="/complaints">Complaints</a> |
+      <a href="/taboo">Taboo Words</a> |
+    {% endif %}
+    {% if session.get('role') == 'student' %}
+      <a href="/courses/register">Register</a> |
+      <a href="/warnings">Warnings</a> |
+    {% endif %}
+    {% if session.get('role') == 'instructor' %}
+      <a href="/warnings">Warnings</a> |
+    {% endif %}
+    <a href="/logout">Logout</a>
+  </nav>
+  <hr>
+  {% block content %}{% endblock %}
+</body>
+</html>

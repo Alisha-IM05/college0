@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Semester Management</h2>
+
+{% if message %}
+  <p><strong>{{ message }}</strong></p>
+{% endif %}
+
+{% if semester %}
+  <p><strong>Current Semester:</strong> {{ semester['name'] }}</p>
+  <p><strong>Current Period:</strong> {{ semester['current_period'] }}</p>
+
+  <form method="POST" action="/semester/advance">
+    <input type="hidden" name="semester_id" value="{{ semester['id'] }}">
+    <button type="submit">Advance to Next Period</button>
+  </form>
+{% else %}
+  <p>No semester found.</p>
+{% endif %}
+{% endblock %}
