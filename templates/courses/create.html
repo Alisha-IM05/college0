@@ -15,9 +15,13 @@
 
 {% if setup_semesters %}
   <form method="POST" action="/courses/create">
-    <label>Course Name:<br>
-      <input type="text" name="name" required>
-    </label><br><br>
+    <label>Course ID (e.g. CSC32200):<br>
+    <input type="text" name="course_id" required>
+  </label><br><br>
+
+  <label>Course Name:<br>
+    <input type="text" name="name" required>
+  </label><br><br>
 
     <label>Instructor:<br>
       <select name="instructor_id" required>
@@ -56,6 +60,7 @@
 {% if current_courses %}
 <table border="1" cellpadding="8" style="width:100%;border-collapse:collapse;background:white;">
   <tr style="background:#2E4A7A;color:white;">
+        <th>Course ID</th>
         <th>Course Name</th>
         <th>Instructor</th>
         <th>Schedule</th>
@@ -65,7 +70,8 @@
     </tr>
     {% for c in current_courses %}
     <tr>
-        <td>{{ c['course_name'] }}</td>
+        <td>{{ c['course_name'].split(' - ')[0] if ' - ' in c['course_name'] else '' }}</td>
+        <td>{{ c['course_name'].split(' - ')[1] if ' - ' in c['course_name'] else c['course_name'] }}</td>
         <td>{{ c['instructor_name'] }}</td>
         <td>{{ c['time_slot'] }}</td>
         <td>{{ c['capacity'] }}</td>

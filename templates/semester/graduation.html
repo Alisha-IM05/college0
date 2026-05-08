@@ -3,20 +3,22 @@
 <h2>Graduation Applications</h2>
 
 {% if applications %}
-  <table border="1" cellpadding="8">
-    <tr>
+  <table border="1" cellpadding="8" style="width:100%;border-collapse:collapse;background:white;">
+    <tr style="background:#2E4A7A;color:white;">
       <th>Student</th>
+      <th>Credits Earned</th>
       <th>Applied At</th>
       <th>Action</th>
     </tr>
     {% for app in applications %}
     <tr>
       <td>{{ app['username'] }}</td>
+      <td>{{ app['credits_earned'] }} / 8</td>
       <td>{{ app['applied_at'] }}</td>
       <td>
         <form method="POST" action="/graduation/resolve/{{ app['student_id'] }}">
-          <button type="submit" name="decision" value="approved">Approve</button>
-          <button type="submit" name="decision" value="rejected">Reject</button>
+          <button type="submit" name="decision" value="approved" style="background:green;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;margin-right:6px;">Approve</button>
+          <button type="submit" name="decision" value="rejected" style="background:#cc0000;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Reject</button>
         </form>
       </td>
     </tr>

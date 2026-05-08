@@ -65,16 +65,27 @@
                     <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
                     {% if role == 'student' %}
                     <td>
-                        <form method="POST" action="/courses/register/{{ course['id'] }}">
-                            <button class="btn" type="submit">Register</button>
-                        </form>
+                        {% set is_enrolled = course['id'] in enrolled | map(attribute='id') | list %}
+                        {% set is_waitlisted = course['id'] in waitlisted | map(attribute='course_id') | list %}
+                        {% if is_enrolled %}
+                            <button class="btn" style="background:#27ae60;cursor:default;" disabled> Enrolled</button>
+                        {% elif is_waitlisted %}
+                            <button class="btn" style="background:#e67e22;cursor:default;" disabled> On Waitlist</button>
+                        {% elif course['capacity'] - course['enrolled_count'] <= 0 %}
+                            <form method="POST" action="/courses/register/{{ course['id'] }}">
+                                <button class="btn" type="submit" style="background:#e67e22;">Join Waitlist</button>
+                            </form>
+                        {% else %}
+                            <form method="POST" action="/courses/register/{{ course['id'] }}">
+                                <button class="btn" type="submit">Register</button>
+                            </form>
+                        {% endif %}
                     </td>
                     {% endif %}
                 </tr>
                 {% endfor %}
             </table>
         {% else %}
-            {% else %}
             <div class="warning">
                 {% if semester and semester['current_period'] == 'setup' %}
                      The semester is opening soon. Please wait for registration to open.
@@ -87,6 +98,32 @@
                 {% endif %}
             </div>
         {% endif %}
+        {% if role == 'student' and waitlisted %}
+        <h3>Your Waitlist</h3>
+        <table>
+            <tr>
+                <th>Course</th>
+                <th>Time Slot</th>
+                <th>Position</th>
+                <th>Status</th>
+            </tr>
+            {% for w in waitlisted %}
+            <tr>
+                <td>{{ w['course_name'] }}</td>
+                <td>{{ w['time_slot'] }}</td>
+                <td>{{ w['position'] }}</td>
+                <td>
+                    {% if w['status'] == 'admitted' %}
+                        ✅ Admitted — check your schedule
+                    {% elif w['status'] == 'denied' %}
+                        ❌ Denied by instructor
+                    {% else %}
+                        ⏳ Pending
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
         {% endif %}
 
         {% if role == 'student' %}
@@ -96,11 +133,17 @@
             <tr>
                 <th>Course</th>
                 <th>Time Slot</th>
+                <th>Action</th>
             </tr>
             {% for course in enrolled %}
             <tr>
                 <td>{{ course['course_name'] }}</td>
                 <td>{{ course['time_slot'] }}</td>
+                <td>
+                    <form method="POST" action="/courses/drop/{{ course['id'] }}">
+                        <button type="submit" style="background:#cc0000;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Drop</button>
+                    </form>
+                </td>
             </tr>
             {% endfor %}
         </table>
