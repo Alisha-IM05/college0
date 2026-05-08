@@ -74,10 +74,19 @@
                 {% endfor %}
             </table>
         {% else %}
+            {% else %}
             <div class="warning">
-                ⚠️ Registration is not currently open. 
-                {% if semester %}The current period is <strong>{{ semester['current_period'] }}</strong>.{% endif %}
+                {% if semester and semester['current_period'] == 'setup' %}
+                     The semester is opening soon. Please wait for registration to open.
+                {% elif semester and semester['current_period'] == 'running' %}
+                     Classes are in session. Registration is closed.
+                {% elif semester and semester['current_period'] == 'grading' %}
+                     Grading period is active. Registration is closed.
+                {% else %}
+                     Registration is not currently open.
+                {% endif %}
             </div>
+        {% endif %}
         {% endif %}
 
         {% if role == 'student' %}
