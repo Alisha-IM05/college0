@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - My Courses</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar { background-color: #2E4A7A; padding: 15px 30px; color: white; display: flex; justify-content: space-between; align-items: center; }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
+        .container { padding: 40px; }
+        h2 { color: #2E4A7A; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        th { background: #2E4A7A; color: white; padding: 12px 16px; text-align: left; }
+        td { padding: 12px 16px; border-bottom: 1px solid #eee; }
+        tr:last-child td { border-bottom: none; }
+        .btn { background: #2E4A7A; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .badge { padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; }
+        .grading { background: #ffd700; color: #333; }
+        .registration { background: #90EE90; color: #333; }
+        .setup { background: #87CEEB; color: #333; }
+        .running { background: #FFB347; color: #333; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>College0</h1>
+        <div>
+            <span>Welcome, {{ username }}</span>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </div>
+    <div class="container">
+        <h2>My Courses</h2>
+        {% if semester %}
+        <div style="background:#2E4A7A;color:white;padding:12px 20px;border-radius:8px;margin-bottom:20px;">
+            📅 <strong>{{ semester['name'] }}</strong> &nbsp;|&nbsp; 
+            Period: <strong>{{ semester['current_period'] | upper }}</strong> &nbsp;|&nbsp;
+            {% if semester['current_period'] == 'grading' %}
+                You can submit grades now.
+            {% elif semester['current_period'] == 'running' %}
+                Classes are in session. Manage your roster below.
+            {% elif semester['current_period'] == 'registration' %}
+                Registration is open. Students can enroll in your courses.
+            {% else %}
+                Semester is in setup. Courses are being configured.
+            {% endif %}
+        </div>
+        {% endif %}
+        {% if courses %}
+        <table>
+            <tr>
+                <th>Course</th>
+                <th>Time Slot</th>
+                <th>Semester</th>
+                <th>Period</th>
+                <th>Enrolled</th>
+                <th>Action</th>
+            </tr>
+            {% for course in courses %}
+            <tr>
+                <td>{{ course['course_name'] }}</td>
+                <td>{{ course['time_slot'] }}</td>
+                <td>{{ course['semester_name'] }}</td>
+                <td><span class="badge {{ course['current_period'] }}">{{ course['current_period'] | upper }}</span></td>
+                <td>{{ course['enrolled_count'] }} / {{ course['capacity'] }}</td>
+                <td><a class="btn" href="/courses/{{ course['id'] }}">View Roster</a></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+            <p>You have no courses assigned.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -74,7 +74,17 @@
         <div class="welcome">
             <span class="badge {{ role }}">{{ role | upper }}</span>
             <h2>Welcome back, {{ username }}!</h2>
-            <p>Use the links below to navigate your features.</p>
+            {% if semester %}
+            <p style="background:#2E4A7A;color:white;padding:10px 16px;border-radius:8px;display:inline-block;margin-top:8px;">
+                📅 <strong>{{ semester['name'] }}</strong> &nbsp;|&nbsp; Period: <strong>{{ semester['current_period'] | upper }}</strong>
+                &nbsp;|&nbsp;
+                {% if semester['current_period'] == 'setup' %}🔧 Courses are being configured.
+                {% elif semester['current_period'] == 'registration' %}📋 Registration is open — enroll in your courses!
+                {% elif semester['current_period'] == 'running' %}📖 Classes are in session.
+                {% elif semester['current_period'] == 'grading' %}✅ Grading period — grades are being submitted.
+                {% endif %}
+            </p>
+            {% endif %}
         </div>
 
         <div class="cards">
@@ -124,9 +134,9 @@
             {% endif %}
 
             {% if role == 'instructor' %}
-            <a class="card" href="/courses/register">
+            <a class="card" href="/instructor/courses">
                 <h3>📚 My Courses</h3>
-                <p>View your courses and manage students.</p>
+                <p>View your courses and manage student rosters.</p>
             </a>
             {% endif %}
         </div>

@@ -6,35 +6,81 @@
   <p><strong>{{ message }}</strong></p>
 {% endif %}
 
-<form method="POST" action="/courses/create">
-  <label>Course Name:<br>
-    <input type="text" name="name" required>
-  </label><br><br>
+{% set setup_semesters = [] %}
+{% for sem in semesters %}
+  {% if sem['current_period'] == 'setup' %}
+    {% set _ = setup_semesters.append(sem) %}
+  {% endif %}
+{% endfor %}
 
-  <label>Instructor:<br>
-    <select name="instructor_id" required>
-      {% for instructor in instructors %}
-        <option value="{{ instructor['id'] }}">{{ instructor['username'] }}</option>
-      {% endfor %}
-    </select>
-  </label><br><br>
+{% if setup_semesters %}
+  <form method="POST" action="/courses/create">
+    <label>Course Name:<br>
+      <input type="text" name="name" required>
+    </label><br><br>
 
-  <label>Schedule (e.g. Mon/Wed 10:00-11:30):<br>
-    <input type="text" name="schedule" required>
-  </label><br><br>
+    <label>Instructor:<br>
+      <select name="instructor_id" required>
+        {% for instructor in instructors %}
+          <option value="{{ instructor['id'] }}">{{ instructor['username'] }}</option>
+        {% endfor %}
+      </select>
+    </label><br><br>
 
-  <label>Capacity:<br>
-    <input type="number" name="capacity" required>
-  </label><br><br>
+    <label>Schedule (e.g. Mon/Wed 10:00-11:30):<br>
+      <input type="text" name="schedule" required>
+    </label><br><br>
 
-  <label>Semester:<br>
-    <select name="semester_id" required>
-      {% for sem in semesters %}
-        <option value="{{ sem['id'] }}">{{ sem['name'] }} ({{ sem['current_period'] }})</option>
-      {% endfor %}
-    </select>
-  </label><br><br>
+    <label>Capacity:<br>
+      <input type="number" name="capacity" required>
+    </label><br><br>
 
-  <button type="submit">Create Course</button>
-</form>
+    <label>Semester:<br>
+      <select name="semester_id" required>
+        {% for sem in setup_semesters %}
+          <option value="{{ sem['id'] }}">{{ sem['name'] }}</option>
+        {% endfor %}
+      </select>
+    </label><br><br>
+
+    <button type="submit">Create Course</button>
+  </form>
+{% else %}
+  <p>Course creation is only available during the setup period.</p>
+  {% for sem in semesters %}
+    <p>Current period for <strong>{{ sem['name'] }}</strong>: <strong>{{ sem['current_period'] }}</strong></p>
+  {% endfor %}
+{% endif %}
+<hr>
+<h3>Courses This Semester</h3>
+{% if current_courses %}
+<table border="1" cellpadding="8" style="width:100%;border-collapse:collapse;background:white;">
+  <tr style="background:#2E4A7A;color:white;">
+        <th>Course Name</th>
+        <th>Instructor</th>
+        <th>Schedule</th>
+        <th>Capacity</th>
+        <th>Enrolled</th>
+        <th>Action</th>
+    </tr>
+    {% for c in current_courses %}
+    <tr>
+        <td>{{ c['course_name'] }}</td>
+        <td>{{ c['instructor_name'] }}</td>
+        <td>{{ c['time_slot'] }}</td>
+        <td>{{ c['capacity'] }}</td>
+        <td>{{ c['enrolled_count'] }}</td>
+        <td>
+            <form method="POST" action="/courses/delete/{{ c['id'] }}">
+                <button type="submit" style="background:#cc0000;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Delete</button>
+            </form>
+        </td>
+    </tr>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p>No courses created yet for this semester.</p>
+{% endif %}
+
 {% endblock %}

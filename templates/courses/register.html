@@ -15,39 +15,16 @@
         .navbar h1 { margin: 0; font-size: 22px; }
         .navbar a { color: white; text-decoration: none; margin-left: 20px; }
         .container { padding: 40px; }
-        .message {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            padding: 12px 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            color: #155724;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        th {
-            background: #2E4A7A;
-            color: white;
-            padding: 12px 16px;
-            text-align: left;
-        }
+        .message { background: #d4edda; border: 1px solid #c3e6cb; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; color: #155724; }
+        .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; color: #856404; }
+        .semester-banner { background: #2E4A7A; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 30px; }
+        th { background: #2E4A7A; color: white; padding: 12px 16px; text-align: left; }
         td { padding: 12px 16px; border-bottom: 1px solid #eee; }
         tr:last-child td { border-bottom: none; }
-        .btn {
-            background: #2E4A7A;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-        }
+        .btn { background: #2E4A7A; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
         .btn:hover { background: #1a3158; }
+        h3 { color: #2E4A7A; margin-top: 30px; }
     </style>
 </head>
 <body>
@@ -63,34 +40,66 @@
     <div class="container">
         <h2>Course Registration</h2>
 
-        {% if message %}
+        {% if semester %}
+        <div class="semester-banner">
+            📅 <strong>{{ semester['name'] }}</strong> &nbsp;|&nbsp; Current Period: <strong>{{ semester['current_period'] | upper }}</strong>
+        </div>
+        {% endif %}
+
+        {% if message and semester and semester['current_period'] == 'registration' %}
         <div class="message">{{ message }}</div>
         {% endif %}
 
+        {% if semester and semester['current_period'] == 'registration' %}
+            <table>
+                <tr>
+                    <th>Course</th>
+                    <th>Time Slot</th>
+                    <th>Spots Available</th>
+                    {% if role == 'student' %}<th>Action</th>{% endif %}
+                </tr>
+                {% for course in courses %}
+                <tr>
+                    <td>{{ course['course_name'] }}</td>
+                    <td>{{ course['time_slot'] }}</td>
+                    <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
+                    {% if role == 'student' %}
+                    <td>
+                        <form method="POST" action="/courses/register/{{ course['id'] }}">
+                            <button class="btn" type="submit">Register</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </table>
+        {% else %}
+            <div class="warning">
+                ⚠️ Registration is not currently open. 
+                {% if semester %}The current period is <strong>{{ semester['current_period'] }}</strong>.{% endif %}
+            </div>
+        {% endif %}
+
+        {% if role == 'student' %}
+        <h3>Your Current Schedule</h3>
+        {% if enrolled %}
         <table>
             <tr>
                 <th>Course</th>
                 <th>Time Slot</th>
-                <th>Spots Available</th>
-                {% if role == 'student' %}
-                <th>Action</th>
-                {% endif %}
             </tr>
-            {% for course in courses %}
+            {% for course in enrolled %}
             <tr>
                 <td>{{ course['course_name'] }}</td>
                 <td>{{ course['time_slot'] }}</td>
-                <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
-                {% if role == 'student' %}
-                <td>
-                    <form method="POST" action="/courses/register/{{ course['id'] }}">
-                        <button class="btn" type="submit">Register</button>
-                    </form>
-                </td>
-                {% endif %}
             </tr>
             {% endfor %}
         </table>
+        {% else %}
+            <p>You are not currently enrolled in any courses.</p>
+        {% endif %}
+        {% endif %}
+
     </div>
 </body>
 </html>

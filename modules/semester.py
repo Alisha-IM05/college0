@@ -22,9 +22,21 @@ def advance_period(semester_id):
             return "Semester not found"
         # Get the current period for this semester
         current_period = semester["current_period"]
-        # If the semester is already in the last period, it cannot move forward
+        # If the semester is already in the last period, create a new semester
         if current_period == "grading":
-            return "Semester is already in the final period"
+            current_name = semester["name"]
+            if "Spring" in current_name:
+                year = int(current_name.split(" ")[1])
+                new_name = f"Fall {year}"
+            else:
+                year = int(current_name.split(" ")[1])
+                new_name = f"Spring {year + 1}"
+            conn.execute(
+                "INSERT INTO semesters (name, current_period) VALUES (?, 'setup')",
+                (new_name,)
+            )
+            conn.commit()
+            return f"New semester {new_name} created in setup period"
         # Find the current period's position in the list
         current_index = PERIOD_ORDER.index(current_period)
         # Move to the next period in the list
