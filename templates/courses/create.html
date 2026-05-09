@@ -39,9 +39,49 @@
       </select>
     </label><br><br>
 
-    <label>Schedule (e.g. Mon/Wed 10:00-11:30):<br>
-      <input type="text" name="schedule" required>
-    </label><br><br>
+    <label>Day(s):<br>
+    <select name="day_of_week" required>
+      <option value="1" data-label="Mon/Wed">Monday / Wednesday</option>
+      <option value="3" data-label="Tue/Thu">Tuesday / Thursday</option>
+      <option value="5" data-label="Fri">Friday</option>
+      <option value="4" data-label="Wed/Fri">Wednesday / Friday</option>
+    </select>
+  </label><br><br>
+
+  <label>Start Time:<br>
+    <select name="start_time" required>
+      <option>08:00</option><option>08:30</option>
+      <option>09:00</option><option>09:30</option>
+      <option>10:00</option><option>10:30</option>
+      <option>11:00</option><option>11:30</option>
+      <option>12:00</option><option>12:30</option>
+      <option>13:00</option><option>13:30</option>
+      <option>14:00</option><option>14:30</option>
+      <option>15:00</option><option>15:30</option>
+      <option>16:00</option><option>16:30</option>
+      <option>17:00</option><option>17:30</option>
+      <option>18:00</option><option>18:30</option>
+      <option>19:00</option><option>19:30</option>
+    </select>
+  </label><br><br>
+
+  <label>End Time:<br>
+    <select name="end_time" required>
+      <option>08:30</option>
+      <option>09:00</option><option>09:30</option>
+      <option>10:00</option><option>10:30</option>
+      <option>11:00</option><option>11:30</option>
+      <option>12:00</option><option>12:30</option>
+      <option>13:00</option><option>13:30</option>
+      <option>14:00</option><option>14:30</option>
+      <option>15:00</option><option>15:30</option>
+      <option>16:00</option><option>16:30</option>
+      <option>17:00</option><option>17:30</option>
+      <option>18:00</option><option>18:30</option>
+      <option>19:00</option><option>19:30</option>
+      <option>20:00</option>
+    </select>
+  </label><br><br>
 
     <label>Capacity:<br>
       <input type="number" name="capacity" required>

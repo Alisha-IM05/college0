@@ -47,8 +47,28 @@
         {% endif %}
 
         {% if message and semester and semester['current_period'] == 'registration' %}
-        <div class="message">{{ message }}</div>
+            {% if 'conflict' in message.lower() %}
+            <div style="background:#f8d7da;border:1px solid #f5c6cb;padding:12px 20px;border-radius:8px;margin-bottom:20px;color:#721c24;">
+                ⛔ {{ message }}
+            </div>
+            {% else %}
+            <div class="message">{{ message }}</div>
+            {% endif %}
         {% endif %}
+        
+        {% if semester and semester['current_period'] == 'registration' and role == 'student' %}
+            {% set enrolled_count = enrolled | length %}
+            {% if enrolled_count == 0 %}
+                <div class="warning">⚠️ You are not registered for any courses. You must register for at least 2 before registration closes.</div>
+            {% elif enrolled_count == 1 %}
+                <div class="warning">⚠️ You are registered for 1 course. You need at least 1 more before registration closes.</div>
+            {% elif enrolled_count >= 4 %}
+                <div class="warning">⚠️ You have reached the maximum of 4 courses.</div>
+            {% else %}
+                <div class="message">✅ You are registered for {{ enrolled_count }} course(s). You can register for up to {{ 4 - enrolled_count }} more.</div>
+            {% endif %}
+        {% endif %}
+
 
         {% if semester and semester['current_period'] == 'registration' %}
             <table>
@@ -61,7 +81,7 @@
                 {% for course in courses %}
                 <tr>
                     <td>{{ course['course_name'] }}</td>
-                    <td>{{ course['time_slot'] }}</td>
+                    <td>{{ course['display_slot'] }}</td>
                     <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
                     {% if role == 'student' %}
                     <td>
@@ -138,7 +158,7 @@
             {% for course in enrolled %}
             <tr>
                 <td>{{ course['course_name'] }}</td>
-                <td>{{ course['time_slot'] }}</td>
+                <td>{{ course['time_slot'] }} {{ course['start_time'] }}-{{ course['end_time'] }}</td>
                 <td>
                     <form method="POST" action="/courses/drop/{{ course['id'] }}">
                         <button type="submit" style="background:#cc0000;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Drop</button>

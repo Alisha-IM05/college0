@@ -97,7 +97,7 @@ def dashboard():
         return redirect(url_for('home'))
     conn = get_db()
     semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
     ).fetchone()
     student_data = None
     grades = None
@@ -137,11 +137,13 @@ def course_registration():
     
     conn = get_db()
     semester = conn.execute(
-            "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
+            
     ).fetchone()
     courses = conn.execute(
-            "SELECT * FROM courses WHERE status = 'active' AND semester_id = ?",
-            (semester['id'],)
+        """SELECT *, time_slot || ' ' || start_time || '-' || end_time as display_slot
+           FROM courses WHERE status = 'active' AND semester_id = ?""",
+        (semester['id'],)
     ).fetchall()
     enrolled = conn.execute(
         """SELECT c.* FROM enrollments e
@@ -173,7 +175,7 @@ def instructor_courses():
         return redirect(url_for('home'))
     conn = get_db()
     semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
     ).fetchone()
     courses = conn.execute(
         """SELECT c.*, s.name as semester_name, s.current_period
@@ -198,10 +200,12 @@ def register_for_course(course_id):
     
     conn = get_db()
     semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
+
     ).fetchone()
     courses = conn.execute(
-        "SELECT * FROM courses WHERE status = 'active' AND semester_id = ?",
+        """SELECT *, time_slot || ' ' || start_time || '-' || end_time as display_slot
+           FROM courses WHERE status = 'active' AND semester_id = ?""",
         (semester['id'],)
     ).fetchall()
     enrolled = conn.execute(
@@ -253,7 +257,7 @@ def semester_management():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     conn = get_db()
-    semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    semester = conn.execute("SELECT * FROM semesters ORDER BY id ASC LIMIT 1").fetchone()
     conn.close()
     return render_template('semester/manage.html',
                            semester=semester,
@@ -267,7 +271,7 @@ def advance_semester():
     semester_id = int(request.form['semester_id'])
     message = advance_period(semester_id)
     conn = get_db()
-    semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    semester = conn.execute("SELECT * FROM semesters ORDER BY id ASC LIMIT 1").fetchone()
     conn.close()
     return render_template('semester/manage.html',
                            semester=semester,
@@ -290,7 +294,7 @@ def retreat_semester():
         conn.execute("UPDATE semesters SET current_period = ? WHERE id = ?", (prev_period, semester_id))
         conn.commit()
         message = f'Moved back to {prev_period}'
-    semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    semester = conn.execute("SELECT * FROM semesters ORDER BY id ASC LIMIT 1").fetchone()
     conn.close()
     return render_template('semester/manage.html',
                            semester=semester,
@@ -308,7 +312,15 @@ def create_course_page():
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
-    current_semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
+    current_semester = conn.execute(
+        """SELECT * FROM semesters 
+           ORDER BY CASE current_period 
+               WHEN 'setup' THEN 1 
+               WHEN 'registration' THEN 2 
+               WHEN 'running' THEN 3 
+               WHEN 'grading' THEN 4 
+           END ASC, id DESC LIMIT 1"""
+    ).fetchone()
     current_courses = conn.execute(
         """SELECT c.*, u.username as instructor_name
            FROM courses c JOIN users u ON c.instructor_id = u.id
@@ -329,12 +341,20 @@ def create_course_route():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     course_id = request.form['course_id']
-    name = request.form['course_id'] + ' - ' + request.form['name']    
+    name = request.form['name']
     instructor_id = int(request.form['instructor_id'])
-    schedule = request.form['schedule']
-    capacity = int(request.form['capacity'])
+    day_of_week = int(request.form['day_of_week'])
+    start_time = request.form['start_time']
+    end_time = request.form['end_time']
     semester_id = int(request.form['semester_id'])
-    message = create_course(semester_id, name, instructor_id, schedule, capacity)
+    capacity = int(request.form['capacity'])
+    
+    # Build time_slot display string
+    day_labels = {'1': 'Mon/Wed', '3': 'Tue/Thu', '4': 'Wed/Fri', '5': 'Fri'}
+    day_label = day_labels.get(request.form['day_of_week'], 'Mon/Wed')
+    time_slot = f"{day_label} {start_time}-{end_time}"
+    
+    message = create_course(semester_id, name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity)
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
