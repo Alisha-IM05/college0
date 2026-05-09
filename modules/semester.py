@@ -66,7 +66,7 @@ def advance_period(semester_id):
 # Returns:
 # 'Course created successfully' if it works
 # an error message if something goes wrong
-def create_course(semester_id, name, instructor_id, time_slot, capacity):
+def create_course(semester_id, name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity):
     conn = get_db()
     try:
         # Get the semester from the database
@@ -94,14 +94,13 @@ def create_course(semester_id, name, instructor_id, time_slot, capacity):
         ).fetchone()
         if instructor is None:
             return 'Instructor not found'
+        if instructor['status'] == 'suspended':
+            return 'This instructor is suspended and cannot teach next semester'
         # Insert the new course into the database
         conn.execute(
-            """
-            INSERT INTO courses 
-            (semester_id, course_name, instructor_id, time_slot, capacity, enrolled_count, status)
-            VALUES (?, ?, ?, ?, ?, 0, 'active')
-            """,
-            (semester_id, name, instructor_id, time_slot, capacity)
+            """INSERT INTO courses (semester_id, course_name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity, enrolled_count, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'active')""",
+            (semester_id, name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity)
         )
         conn.commit()
         return 'Course created successfully'
@@ -128,7 +127,13 @@ def register_student(student_id, course_id):
             return 'Semester not found'
         # Check if registration period is open
         if semester['current_period'] != 'registration':
-            return 'Registration is not currently open'
+            # Check if student has special registration eligibility
+            special = conn.execute(
+                "SELECT special_registration FROM students WHERE id = ?",
+                (student_id,)
+            ).fetchone()
+            if not special or special['special_registration'] == 0:
+                return 'Registration is not currently open'
         # Check if student is already enrolled in this course
         already_enrolled = conn.execute(
             """
@@ -139,19 +144,21 @@ def register_student(student_id, course_id):
         ).fetchone()
         if already_enrolled:
             return 'Student is already enrolled in this course'
-        # Count how many courses the student is currently enrolled in
+        # Count how many courses the student is enrolled in THIS semester only
         enrolled_count = conn.execute(
-            """
-            SELECT COUNT(*) as count 
-            FROM enrollments 
-            WHERE student_id = ? AND status = 'enrolled'
-            """,
+            """SELECT COUNT(*) as count FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               JOIN semesters s ON c.semester_id = s.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
             (student_id,)
         ).fetchone()['count']
-        # Count waitlisted courses too
+        # Count waitlisted courses in THIS semester only
         waitlist_count = conn.execute(
-            """SELECT COUNT(*) as count FROM waitlist
-               WHERE student_id = ?""",
+            """SELECT COUNT(*) as count FROM waitlist w
+               JOIN courses c ON w.course_id = c.id
+               WHERE w.student_id = ?
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
             (student_id,)
         ).fetchone()['count']
         # Check max course limit (4) — enrolled + waitlisted combined
@@ -165,9 +172,10 @@ def register_student(student_id, course_id):
         # Only allow retake if previous grade was F
         if past_grade and past_grade['letter_grade'] != 'F':
             return 'Student cannot retake a course without a prior F grade'
-        # Check for time conflicts with existing courses
-        if check_conflict(student_id, course_id):
-            return 'Time conflict detected with an existing course'
+        # Check for time conflicts
+        conflict_course = get_conflict_course(student_id, course_id, conn)
+        if conflict_course:
+            return f'Time conflict: {conflict_course["course_name"]} ({conflict_course["time_slot"]} {conflict_course["start_time"]}-{conflict_course["end_time"]}) overlaps with the course you are trying to register for'
         # Get course details
         course = conn.execute(
             "SELECT * FROM courses WHERE id = ?",
@@ -199,32 +207,98 @@ def register_student(student_id, course_id):
 # Returns:
 #  True if there IS a conflict
 #  False if there is NO conflict
+def parse_time_slot(time_slot):
+    """Parse 'Mon/Wed 10:00-11:30' into (days, start_minutes, end_minutes)"""
+    try:
+        parts = time_slot.strip().split(' ')
+        days = set(parts[0].split('/'))
+        times = parts[1].split('-')
+        def to_minutes(t):
+            h, m = t.split(':')
+            return int(h) * 60 + int(m)
+        start = to_minutes(times[0])
+        end = to_minutes(times[1])
+        return days, start, end
+    except:
+        return None, None, None
+
+def times_overlap(days1, start1, end1, days2, start2, end2):
+    """Check if two time slots overlap"""
+    if not days1 & days2:  # no common days
+        return False
+    return start1 < end2 and start2 < end1
+
+def get_conflict_course(student_id, course_id, conn=None):
+    """Returns the conflicting course dict or None"""
+    close = False
+    if conn is None:
+        conn = get_db()
+        close = True
+    try:
+        new_course = conn.execute(
+            "SELECT day_of_week, start_time, end_time, time_slot FROM courses WHERE id = ?",
+            (course_id,)
+        ).fetchone()
+        if new_course is None or new_course['day_of_week'] is None:
+            return None
+        existing = conn.execute(
+            """SELECT c.*
+               FROM courses c
+               JOIN enrollments e ON c.id = e.course_id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id ASC LIMIT 1)""",
+            (student_id,)
+        ).fetchall()
+        new_days = set(new_course['time_slot'].split('/'))
+        for course in existing:
+            if course['day_of_week'] is None:
+                continue
+            existing_days = set(course['time_slot'].split('/'))
+            if not new_days & existing_days:
+                continue
+            if new_course['start_time'] < course['end_time'] and course['start_time'] < new_course['end_time']:
+                return course
+        return None
+    finally:
+        if close:
+            conn.close()
+
 def check_conflict(student_id, course_id):
     conn = get_db()
     try:
-        # Get the time slot of the new course the student wants
         new_course = conn.execute(
-            "SELECT time_slot FROM courses WHERE id = ?",
+            "SELECT day_of_week, start_time, end_time, time_slot FROM courses WHERE id = ?",
             (course_id,)
         ).fetchone()
-        # If the course doesn't exist, block it (treat as conflict)
         if new_course is None:
             return True
-        # Get all time slots of courses the student is already enrolled in
-        existing_slots = conn.execute(
-            """
-            SELECT c.time_slot 
-            FROM courses c
-            JOIN enrollments e ON c.id = e.course_id
-            WHERE e.student_id = ? AND e.status = 'enrolled'
-            """,
+        # Fall back to text parsing if new columns not set
+        if new_course['day_of_week'] is None:
+            return False
+        existing = conn.execute(
+            """SELECT c.day_of_week, c.start_time, c.end_time, c.time_slot
+               FROM courses c
+               JOIN enrollments e ON c.id = e.course_id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id ASC LIMIT 1)""",
             (student_id,)
         ).fetchall()
-        # Check each existing course for a time conflict
-        for slot in existing_slots:
-            if slot['time_slot'] == new_course['time_slot']:
-                return True  # conflict found
-        # If no conflicts were found
+        for course in existing:
+            if course['day_of_week'] is None:
+                continue
+            # Check same day — for Mon/Wed (1) and Tue/Thu (3), Fri (5), Wed/Fri (4)
+            # We use time_slot string to check shared days
+            new_days = set(new_course['time_slot'].split('/'))
+            existing_days = set(course['time_slot'].split('/'))
+            if not new_days & existing_days:
+                continue
+            # Check time overlap
+            new_start = new_course['start_time']
+            new_end = new_course['end_time']
+            ex_start = course['start_time']
+            ex_end = course['end_time']
+            if new_start < ex_end and ex_start < new_end:
+                return True
         return False
     finally:
         conn.close()
@@ -270,7 +344,7 @@ def add_to_waitlist(student_id, course_id):
 # Returns:
 #  success message if admitted
 #  an error message if something goes wrong
-def admit_from_waitlist(course_id, student_id):
+def admit_from_waitlist(course_id, student_id, instructor_id=None):
     conn = get_db()
     try:
         # Get course details
@@ -278,7 +352,15 @@ def admit_from_waitlist(course_id, student_id):
             "SELECT * FROM courses WHERE id = ?",
             (course_id,)
         ).fetchone()
-        # Check if there is space in the course
+        if course is None:
+            return 'Course not found'
+        # Check instructor is assigned to this course
+        if instructor_id and course['instructor_id'] != instructor_id:
+            return 'You are not the instructor assigned to this course'
+        # Check time conflict for the student being admitted
+        conflict = get_conflict_course(student_id, course_id, conn)
+        if conflict:
+            return f'Cannot admit — time conflict with {conflict["course_name"]} ({conflict["time_slot"]} {conflict["start_time"]}-{conflict["end_time"]})'
         # Instructors can override capacity for waitlisted students
         # capacity increases by 1 to accommodate the admitted student
         conn.execute(
@@ -353,6 +435,16 @@ def enforce_minimums(semester_id):
                     "UPDATE enrollments SET status = 'cancelled' WHERE course_id = ?",
                     (course['id'],)
                 )
+                # Flag affected students for special registration
+                affected = conn.execute(
+                    "SELECT student_id FROM enrollments WHERE course_id = ? AND status = 'cancelled'",
+                    (course['id'],)
+                ).fetchall()
+                for s in affected:
+                    conn.execute(
+                        "UPDATE students SET special_registration = 1 WHERE id = ?",
+                        (s['student_id'],)
+                    )
                 # Warn the instructor
                 conn.execute(
                     """

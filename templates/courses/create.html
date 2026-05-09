@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Create New Course</h2>
-
+{% if semester and semester['current_period'] == 'setup' %}
+    <h2>Create New Course</h2>
+{% elif semester and semester['current_period'] == 'registration' %}
+    <h2>Available Courses</h2>
+{% else %}
+    <h2>Current Courses</h2>
+{% endif %}
 {% if message %}
   <p><strong>{{ message }}</strong></p>
 {% endif %}
@@ -14,6 +19,9 @@
 {% endfor %}
 
 {% if setup_semesters %}
+  <p style="background:#2E4A7A;color:white;padding:10px 16px;border-radius:8px;display:inline-block;">
+    📅 <strong>{{ setup_semesters[0]['name'] }}</strong> &nbsp;|&nbsp; Current Period: <strong>SETUP</strong>
+  </p>
   <form method="POST" action="/courses/create">
     <label>Course ID (e.g. CSC32200):<br>
     <input type="text" name="course_id" required>
@@ -31,29 +39,63 @@
       </select>
     </label><br><br>
 
-    <label>Schedule (e.g. Mon/Wed 10:00-11:30):<br>
-      <input type="text" name="schedule" required>
-    </label><br><br>
+    <label>Day(s):<br>
+    <select name="day_of_week" required>
+      <option value="1" data-label="Mon/Wed">Monday / Wednesday</option>
+      <option value="3" data-label="Tue/Thu">Tuesday / Thursday</option>
+      <option value="5" data-label="Fri">Friday</option>
+      <option value="4" data-label="Wed/Fri">Wednesday / Friday</option>
+    </select>
+  </label><br><br>
+
+  <label>Start Time:<br>
+    <select name="start_time" required>
+      <option>08:00</option><option>08:30</option>
+      <option>09:00</option><option>09:30</option>
+      <option>10:00</option><option>10:30</option>
+      <option>11:00</option><option>11:30</option>
+      <option>12:00</option><option>12:30</option>
+      <option>13:00</option><option>13:30</option>
+      <option>14:00</option><option>14:30</option>
+      <option>15:00</option><option>15:30</option>
+      <option>16:00</option><option>16:30</option>
+      <option>17:00</option><option>17:30</option>
+      <option>18:00</option><option>18:30</option>
+      <option>19:00</option><option>19:30</option>
+    </select>
+  </label><br><br>
+
+  <label>End Time:<br>
+    <select name="end_time" required>
+      <option>08:30</option>
+      <option>09:00</option><option>09:30</option>
+      <option>10:00</option><option>10:30</option>
+      <option>11:00</option><option>11:30</option>
+      <option>12:00</option><option>12:30</option>
+      <option>13:00</option><option>13:30</option>
+      <option>14:00</option><option>14:30</option>
+      <option>15:00</option><option>15:30</option>
+      <option>16:00</option><option>16:30</option>
+      <option>17:00</option><option>17:30</option>
+      <option>18:00</option><option>18:30</option>
+      <option>19:00</option><option>19:30</option>
+      <option>20:00</option>
+    </select>
+  </label><br><br>
 
     <label>Capacity:<br>
       <input type="number" name="capacity" required>
     </label><br><br>
 
-    <label>Semester:<br>
-      <select name="semester_id" required>
-        {% for sem in setup_semesters %}
-          <option value="{{ sem['id'] }}">{{ sem['name'] }}</option>
-        {% endfor %}
-      </select>
-    </label><br><br>
+    <input type="hidden" name="semester_id" value="{{ setup_semesters[0]['id'] }}">
 
     <button type="submit">Create Course</button>
   </form>
 {% else %}
   <p>Course creation is only available during the setup period.</p>
-  {% for sem in semesters %}
-    <p>Current period for <strong>{{ sem['name'] }}</strong>: <strong>{{ sem['current_period'] }}</strong></p>
-  {% endfor %}
+  {% if semester %}
+    <p>{{ semester['name'] }} | Current Period: <strong>{{ semester['current_period'] | upper }}</strong></p>
+  {% endif %}
 {% endif %}
 <hr>
 <h3>Courses This Semester</h3>
