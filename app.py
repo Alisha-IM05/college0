@@ -138,8 +138,14 @@ def course_registration():
     conn = get_db()
     semester = conn.execute(
             "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
-            
     ).fetchone()
+    special_registration = False
+    if session['role'] == 'student':
+        sr = conn.execute(
+            "SELECT special_registration FROM students WHERE id = ?",
+            (session['user_id'],)
+        ).fetchone()
+        special_registration = sr and sr['special_registration'] == 1
     courses = conn.execute(
         """SELECT c.*, u.username as instructor_name,
            c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
@@ -157,6 +163,15 @@ def course_registration():
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    cancelled_courses = conn.execute(
+        """SELECT c.*, u.username as instructor_name 
+           FROM enrollments e
+           JOIN courses c ON e.course_id = c.id
+           LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE e.student_id = ? AND e.status = 'cancelled'
+           AND c.semester_id = ?""",
+        (session['user_id'], semester['id'])
+    ).fetchall()
     waitlisted = conn.execute(
         """SELECT w.*, c.course_name, c.time_slot
            FROM waitlist w
@@ -171,9 +186,11 @@ def course_registration():
                            courses=courses,
                            semester=semester,
                            enrolled=enrolled,
+                           cancelled_courses=cancelled_courses,                           
                            role=session['role'],
                            username=session['username'],
-                           waitlisted=waitlisted)
+                           waitlisted=waitlisted,
+                           special_registration=special_registration)
 @app.route('/instructor/courses')
 def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -224,6 +241,15 @@ def register_for_course(course_id):
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    cancelled_courses = conn.execute(
+        """SELECT c.*, u.username as instructor_name 
+           FROM enrollments e
+           JOIN courses c ON e.course_id = c.id
+           LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE e.student_id = ? AND e.status = 'cancelled'
+           AND c.semester_id = ?""",
+        (session['user_id'], semester['id'])
+    ).fetchall()
     waitlisted = conn.execute(
         """SELECT w.*, c.course_name, c.time_slot
            FROM waitlist w
@@ -238,6 +264,7 @@ def register_for_course(course_id):
                            courses=courses,
                            semester=semester,
                            enrolled=enrolled,
+                           cancelled_courses=cancelled_courses,
                            role=session['role'],
                            username=session['username'],
                            message=message,
@@ -319,7 +346,7 @@ def create_course_page():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     conn = get_db()
-    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
+    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
     current_semester = conn.execute(
         """SELECT * FROM semesters 
@@ -365,7 +392,7 @@ def create_course_route():
     
     message = create_course(semester_id, name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity)
     conn = get_db()
-    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor'").fetchall()
+    instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
     current_semester = conn.execute("SELECT * FROM semesters ORDER BY id DESC LIMIT 1").fetchone()
     current_courses = conn.execute(

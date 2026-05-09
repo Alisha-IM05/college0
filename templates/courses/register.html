@@ -101,6 +101,42 @@
                 {% endfor %}
             </table>
         {% else %}
+            {% if special_registration %}
+            <div class="message">
+                🔄 One of your courses was cancelled. You have been given a special registration period to choose another course.
+            </div>
+            <table>
+                <tr>
+                    <th>Course</th>
+                    <th>Time Slot</th>
+                    <th>Instructor</th>
+                    <th>Spots Available</th>
+                    <th>Status</th>
+                </tr>
+                {% for course in courses %}
+                <tr>
+                    <td>{{ course['course_name'] }}</td>
+                    <td>{{ course['display_slot'] }}</td>
+                    <td>{{ course['instructor_name'] or 'TBA' }}</td>
+                    <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
+                    <td>
+                        {% set is_enrolled = course['id'] in enrolled | map(attribute='id') | list %}
+                        {% if is_enrolled %}
+                            <button class="btn" style="background:#27ae60;cursor:default;" disabled>✓ Enrolled</button>
+                        {% elif course['capacity'] - course['enrolled_count'] <= 0 %}
+                            <form method="POST" action="/courses/register/{{ course['id'] }}">
+                                <button class="btn" type="submit" style="background:#e67e22;">Join Waitlist</button>
+                            </form>
+                        {% else %}
+                            <form method="POST" action="/courses/register/{{ course['id'] }}">
+                                <button class="btn" type="submit">Register</button>
+                            </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
             <div class="warning">
                 {% if semester and semester['current_period'] == 'setup' %}
                     🔧 The semester is opening soon. Please wait for registration to open.
@@ -112,6 +148,7 @@
                     ⚠️ Registration is not currently open.
                 {% endif %}
             </div>
+            {% endif %}
         {% endif %}
 
         {% if role == 'student' and waitlisted %}
@@ -137,6 +174,25 @@
                         ⏳ Pending
                     {% endif %}
                 </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+        {% if role == 'student' and cancelled_courses %}
+        <h3>⚠️ Cancelled Courses</h3>
+        <table>
+            <tr>
+                <th>Course</th>
+                <th>Time Slot</th>
+                <th>Instructor</th>
+                <th>Status</th>
+            </tr>
+            {% for course in cancelled_courses %}
+            <tr>
+                <td>{{ course['course_name'] }}</td>
+                <td>{{ course['time_slot'] }} {{ course['start_time'] }}-{{ course['end_time'] }}</td>
+                <td>{{ course['instructor_name'] or 'TBA' }}</td>
+                <td style="color:#cc0000;font-weight:bold;">❌ Cancelled — low enrollment</td>
             </tr>
             {% endfor %}
         </table>

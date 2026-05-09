@@ -94,6 +94,8 @@ def create_course(semester_id, name, instructor_id, time_slot, day_of_week, star
         ).fetchone()
         if instructor is None:
             return 'Instructor not found'
+        if instructor['status'] == 'suspended':
+            return 'This instructor is suspended and cannot teach next semester'
         # Insert the new course into the database
         conn.execute(
             """INSERT INTO courses (semester_id, course_name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity, enrolled_count, status)
@@ -125,7 +127,13 @@ def register_student(student_id, course_id):
             return 'Semester not found'
         # Check if registration period is open
         if semester['current_period'] != 'registration':
-            return 'Registration is not currently open'
+            # Check if student has special registration eligibility
+            special = conn.execute(
+                "SELECT special_registration FROM students WHERE id = ?",
+                (student_id,)
+            ).fetchone()
+            if not special or special['special_registration'] == 0:
+                return 'Registration is not currently open'
         # Check if student is already enrolled in this course
         already_enrolled = conn.execute(
             """
@@ -427,6 +435,16 @@ def enforce_minimums(semester_id):
                     "UPDATE enrollments SET status = 'cancelled' WHERE course_id = ?",
                     (course['id'],)
                 )
+                # Flag affected students for special registration
+                affected = conn.execute(
+                    "SELECT student_id FROM enrollments WHERE course_id = ? AND status = 'cancelled'",
+                    (course['id'],)
+                ).fetchall()
+                for s in affected:
+                    conn.execute(
+                        "UPDATE students SET special_registration = 1 WHERE id = ?",
+                        (s['student_id'],)
+                    )
                 # Warn the instructor
                 conn.execute(
                     """

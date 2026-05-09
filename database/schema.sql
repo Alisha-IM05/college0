@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS students (
     cumulative_gpa REAL DEFAULT 0.0,
     honor_roll INTEGER DEFAULT 0,
     credits_earned INTEGER DEFAULT 0,
-    FOREIGN KEY (id) REFERENCES users(id)
+    special_registration INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS semesters (
