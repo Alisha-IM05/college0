@@ -178,7 +178,7 @@
             {% endfor %}
         </table>
         {% endif %}
-        {% if role == 'student' and cancelled_courses %}
+        {% if role == 'student' and cancelled_courses and semester and semester['current_period'] in ['running', 'grading'] %}
         <h3>⚠️ Cancelled Courses</h3>
         <table>
             <tr>
