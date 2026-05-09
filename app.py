@@ -196,7 +196,13 @@ def register_for_course(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
     
-    message = register_student(session['user_id'], course_id)
+    # Check student is active/matriculated
+        student = conn.execute(
+            "SELECT * FROM users WHERE id = ? AND role = 'student'",
+            (student_id,)
+        ).fetchone()
+        if student is None or student['status'] != 'active':
+            return 'Only active matriculated students can register for courses'
     
     conn = get_db()
     semester = conn.execute(
