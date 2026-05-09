@@ -4,19 +4,13 @@
     <title>College0 - Course Registration</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
-        .navbar {
-            background-color: #2E4A7A;
-            padding: 15px 30px;
-            color: white;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+        .navbar { background-color: #2E4A7A; padding: 15px 30px; color: white; display: flex; justify-content: space-between; align-items: center; }
         .navbar h1 { margin: 0; font-size: 22px; }
         .navbar a { color: white; text-decoration: none; margin-left: 20px; }
         .container { padding: 40px; }
         .message { background: #d4edda; border: 1px solid #c3e6cb; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; color: #155724; }
         .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; color: #856404; }
+        .error { background: #f8d7da; border: 1px solid #f5c6cb; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; color: #721c24; }
         .semester-banner { background: #2E4A7A; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; }
         table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 30px; }
         th { background: #2E4A7A; color: white; padding: 12px 16px; text-align: left; }
@@ -48,14 +42,12 @@
 
         {% if message and semester and semester['current_period'] == 'registration' %}
             {% if 'conflict' in message.lower() %}
-            <div style="background:#f8d7da;border:1px solid #f5c6cb;padding:12px 20px;border-radius:8px;margin-bottom:20px;color:#721c24;">
-                ⛔ {{ message }}
-            </div>
+            <div class="error">⛔ {{ message }}</div>
             {% else %}
             <div class="message">{{ message }}</div>
             {% endif %}
         {% endif %}
-        
+
         {% if semester and semester['current_period'] == 'registration' and role == 'student' %}
             {% set enrolled_count = enrolled | length %}
             {% if enrolled_count == 0 %}
@@ -69,19 +61,20 @@
             {% endif %}
         {% endif %}
 
-
         {% if semester and semester['current_period'] == 'registration' %}
             <table>
                 <tr>
                     <th>Course</th>
                     <th>Time Slot</th>
+                    <th>Instructor</th>
                     <th>Spots Available</th>
-                    {% if role == 'student' %}<th>Action</th>{% endif %}
+                    <th>Status</th>
                 </tr>
                 {% for course in courses %}
                 <tr>
                     <td>{{ course['course_name'] }}</td>
                     <td>{{ course['display_slot'] }}</td>
+                    <td>{{ course['instructor_name'] or 'TBA' }}</td>
                     <td>{{ course['capacity'] - course['enrolled_count'] }}</td>
                     {% if role == 'student' %}
                     <td>
@@ -101,6 +94,8 @@
                             </form>
                         {% endif %}
                     </td>
+                    {% else %}
+                    <td>—</td>
                     {% endif %}
                 </tr>
                 {% endfor %}
@@ -108,16 +103,17 @@
         {% else %}
             <div class="warning">
                 {% if semester and semester['current_period'] == 'setup' %}
-                     The semester is opening soon. Please wait for registration to open.
+                    🔧 The semester is opening soon. Please wait for registration to open.
                 {% elif semester and semester['current_period'] == 'running' %}
-                     Classes are in session. Registration is closed.
+                    📖 Classes are in session. Registration is closed.
                 {% elif semester and semester['current_period'] == 'grading' %}
-                     Grading period is active. Registration is closed.
+                    ✅ Grading period is active. Registration is closed.
                 {% else %}
-                     Registration is not currently open.
+                    ⚠️ Registration is not currently open.
                 {% endif %}
             </div>
         {% endif %}
+
         {% if role == 'student' and waitlisted %}
         <h3>Your Waitlist</h3>
         <table>
@@ -153,17 +149,21 @@
             <tr>
                 <th>Course</th>
                 <th>Time Slot</th>
-                <th>Action</th>
+                <th>Instructor</th>
+                {% if semester and semester['current_period'] == 'registration' %}<th>Action</th>{% endif %}
             </tr>
             {% for course in enrolled %}
             <tr>
                 <td>{{ course['course_name'] }}</td>
                 <td>{{ course['time_slot'] }} {{ course['start_time'] }}-{{ course['end_time'] }}</td>
+                <td>{{ course['instructor_name'] or 'TBA' }}</td>
+                {% if semester and semester['current_period'] == 'registration' %}
                 <td>
                     <form method="POST" action="/courses/drop/{{ course['id'] }}">
                         <button type="submit" style="background:#cc0000;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Drop</button>
                     </form>
                 </td>
+                {% endif %}
             </tr>
             {% endfor %}
         </table>

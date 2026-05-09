@@ -141,13 +141,18 @@ def course_registration():
             
     ).fetchone()
     courses = conn.execute(
-        """SELECT *, time_slot || ' ' || start_time || '-' || end_time as display_slot
-           FROM courses WHERE status = 'active' AND semester_id = ?""",
+        """SELECT c.*, u.username as instructor_name,
+           c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
+           FROM courses c
+           LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE c.status = 'active' AND c.semester_id = ?""",
         (semester['id'],)
     ).fetchall()
     enrolled = conn.execute(
-        """SELECT c.* FROM enrollments e
+        """SELECT c.*, u.username as instructor_name 
+           FROM enrollments e
            JOIN courses c ON e.course_id = c.id
+           LEFT JOIN users u ON c.instructor_id = u.id
            WHERE e.student_id = ? AND e.status = 'enrolled'
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
@@ -196,27 +201,25 @@ def register_for_course(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
     
-    # Check student is active/matriculated
-        student = conn.execute(
-            "SELECT * FROM users WHERE id = ? AND role = 'student'",
-            (student_id,)
-        ).fetchone()
-        if student is None or student['status'] != 'active':
-            return 'Only active matriculated students can register for courses'
+    message = register_student(session['user_id'], course_id)
     
     conn = get_db()
     semester = conn.execute(
         "SELECT * FROM semesters ORDER BY id ASC LIMIT 1"
-
     ).fetchone()
     courses = conn.execute(
-        """SELECT *, time_slot || ' ' || start_time || '-' || end_time as display_slot
-           FROM courses WHERE status = 'active' AND semester_id = ?""",
+        """SELECT c.*, u.username as instructor_name,
+           c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
+           FROM courses c
+           LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE c.status = 'active' AND c.semester_id = ?""",
         (semester['id'],)
     ).fetchall()
     enrolled = conn.execute(
-        """SELECT c.* FROM enrollments e
+        """SELECT c.*, u.username as instructor_name 
+           FROM enrollments e
            JOIN courses c ON e.course_id = c.id
+           LEFT JOIN users u ON c.instructor_id = u.id
            WHERE e.student_id = ? AND e.status = 'enrolled'
            AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
