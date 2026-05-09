@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Create New Course</h2>
-
+{% if semester and semester['current_period'] == 'setup' %}
+    <h2>Create New Course</h2>
+{% elif semester and semester['current_period'] == 'registration' %}
+    <h2>Available Courses</h2>
+{% else %}
+    <h2>Current Courses</h2>
+{% endif %}
 {% if message %}
   <p><strong>{{ message }}</strong></p>
 {% endif %}
@@ -14,6 +19,9 @@
 {% endfor %}
 
 {% if setup_semesters %}
+  <p style="background:#2E4A7A;color:white;padding:10px 16px;border-radius:8px;display:inline-block;">
+    📅 <strong>{{ setup_semesters[0]['name'] }}</strong> &nbsp;|&nbsp; Current Period: <strong>SETUP</strong>
+  </p>
   <form method="POST" action="/courses/create">
     <label>Course ID (e.g. CSC32200):<br>
     <input type="text" name="course_id" required>
@@ -39,21 +47,15 @@
       <input type="number" name="capacity" required>
     </label><br><br>
 
-    <label>Semester:<br>
-      <select name="semester_id" required>
-        {% for sem in setup_semesters %}
-          <option value="{{ sem['id'] }}">{{ sem['name'] }}</option>
-        {% endfor %}
-      </select>
-    </label><br><br>
+    <input type="hidden" name="semester_id" value="{{ setup_semesters[0]['id'] }}">
 
     <button type="submit">Create Course</button>
   </form>
 {% else %}
   <p>Course creation is only available during the setup period.</p>
-  {% for sem in semesters %}
-    <p>Current period for <strong>{{ sem['name'] }}</strong>: <strong>{{ sem['current_period'] }}</strong></p>
-  {% endfor %}
+  {% if semester %}
+    <p>{{ semester['name'] }} | Current Period: <strong>{{ semester['current_period'] | upper }}</strong></p>
+  {% endif %}
 {% endif %}
 <hr>
 <h3>Courses This Semester</h3>

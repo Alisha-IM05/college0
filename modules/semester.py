@@ -139,19 +139,21 @@ def register_student(student_id, course_id):
         ).fetchone()
         if already_enrolled:
             return 'Student is already enrolled in this course'
-        # Count how many courses the student is currently enrolled in
+        # Count how many courses the student is enrolled in THIS semester only
         enrolled_count = conn.execute(
-            """
-            SELECT COUNT(*) as count 
-            FROM enrollments 
-            WHERE student_id = ? AND status = 'enrolled'
-            """,
+            """SELECT COUNT(*) as count FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               JOIN semesters s ON c.semester_id = s.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
             (student_id,)
         ).fetchone()['count']
-        # Count waitlisted courses too
+        # Count waitlisted courses in THIS semester only
         waitlist_count = conn.execute(
-            """SELECT COUNT(*) as count FROM waitlist
-               WHERE student_id = ?""",
+            """SELECT COUNT(*) as count FROM waitlist w
+               JOIN courses c ON w.course_id = c.id
+               WHERE w.student_id = ?
+               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
             (student_id,)
         ).fetchone()['count']
         # Check max course limit (4) — enrolled + waitlisted combined

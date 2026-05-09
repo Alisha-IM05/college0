@@ -319,6 +319,7 @@ def create_course_page():
     return render_template('courses/create.html',
                            instructors=instructors,
                            semesters=semesters,
+                           semester=current_semester,
                            current_courses=current_courses,
                            role=session['role'],
                            username=session['username'])
@@ -348,6 +349,7 @@ def create_course_route():
     return render_template('courses/create.html',
                            instructors=instructors,
                            semesters=semesters,
+                           semester=current_semester,
                            current_courses=current_courses,
                            role=session['role'],
                            username=session['username'],
