@@ -495,7 +495,7 @@ def admit_waitlist_route(course_id):
         return redirect(url_for('home'))
     
     student_id = int(request.form['student_id'])
-    message = admit_from_waitlist(course_id, student_id)
+    message = admit_from_waitlist(course_id, student_id, session['user_id'])
     return redirect(url_for('class_detail', course_id=course_id))
 @app.route('/courses/<int:course_id>/reject', methods=['POST'])
 def reject_waitlist_route(course_id):

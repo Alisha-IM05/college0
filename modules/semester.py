@@ -336,7 +336,7 @@ def add_to_waitlist(student_id, course_id):
 # Returns:
 #  success message if admitted
 #  an error message if something goes wrong
-def admit_from_waitlist(course_id, student_id):
+def admit_from_waitlist(course_id, student_id, instructor_id=None):
     conn = get_db()
     try:
         # Get course details
@@ -344,7 +344,15 @@ def admit_from_waitlist(course_id, student_id):
             "SELECT * FROM courses WHERE id = ?",
             (course_id,)
         ).fetchone()
-        # Check if there is space in the course
+        if course is None:
+            return 'Course not found'
+        # Check instructor is assigned to this course
+        if instructor_id and course['instructor_id'] != instructor_id:
+            return 'You are not the instructor assigned to this course'
+        # Check time conflict for the student being admitted
+        conflict = get_conflict_course(student_id, course_id, conn)
+        if conflict:
+            return f'Cannot admit — time conflict with {conflict["course_name"]} ({conflict["time_slot"]} {conflict["start_time"]}-{conflict["end_time"]})'
         # Instructors can override capacity for waitlisted students
         # capacity increases by 1 to accommodate the admitted student
         conn.execute(
