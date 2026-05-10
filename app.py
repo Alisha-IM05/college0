@@ -12,6 +12,13 @@ from modules.conduct import (
 
 from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
 
+from modules.ai_features import (
+    submit_query, get_query_history,
+    flag_query, get_flags_for_query, get_all_flags, resolve_flag,
+    generate_recommendations, save_recommendations, get_recommendations,
+    init_vector_db, seed_vector_db, refresh_vector_db,
+)
+
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
@@ -717,6 +724,91 @@ def remove_taboo(word):
         return redirect(url_for('home'))
     remove_taboo_word(word)
     return redirect(url_for('manage_taboo'))
+
+
+# ── AI FEATURES (Subsystem 5 — Almasur) ──────────────────────────────────────
+
+@app.route('/ai/query', methods=['GET', 'POST'])
+def ai_query():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    user_id = session['user_id']
+    role    = session.get('role', 'visitor')
+
+    result  = None
+    error   = None
+
+    if request.method == 'POST':
+        query_text = request.form.get('query_text', '')
+        result = submit_query(user_id, role, query_text)
+        if result.get('error'):
+            error = result['error']
+            result = None
+
+    history = get_query_history(user_id, limit=10)
+    return render_template('ai/query.html',
+                           role=role,
+                           result=result,
+                           error=error,
+                           history=history)
+
+
+@app.route('/ai/history')
+def ai_history():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    history = get_query_history(session['user_id'], limit=20)
+    return render_template('ai/query.html',
+                           role=session.get('role', 'visitor'),
+                           result=None,
+                           error=None,
+                           history=history)
+
+
+@app.route('/ai/query/<int:query_id>/flag', methods=['POST'])
+def ai_flag_query(query_id):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    reason = request.form.get('reason', '').strip()
+    if reason:
+        flag_query(query_id, session['user_id'], reason)
+    return redirect(url_for('ai_query'))
+
+
+@app.route('/ai/flags')
+def ai_flags():
+    if 'user_id' not in session or session.get('role') != 'registrar':
+        return redirect(url_for('home'))
+    status_filter = request.args.get('status')
+    flags = get_all_flags(status_filter=status_filter)
+    return render_template('ai/flags.html', flags=flags, role='registrar', status_filter=status_filter)
+
+
+@app.route('/ai/flags/<int:flag_id>/resolve', methods=['POST'])
+def ai_resolve_flag(flag_id):
+    if 'user_id' not in session or session.get('role') != 'registrar':
+        return redirect(url_for('home'))
+    resolve_flag(flag_id, session['user_id'])
+    return redirect(url_for('ai_flags'))
+
+
+@app.route('/ai/recommendations')
+def ai_recommendations():
+    if 'user_id' not in session or session.get('role') != 'student':
+        return redirect(url_for('home'))
+    recs = get_recommendations(session['user_id'])
+    return render_template('ai/recommendations.html',
+                           role='student',
+                           recommendations=recs)
+
+
+@app.route('/ai/recommendations/refresh', methods=['POST'])
+def ai_recommendations_refresh():
+    if 'user_id' not in session or session.get('role') != 'student':
+        return redirect(url_for('home'))
+    recs = generate_recommendations(session['user_id'])
+    save_recommendations(session['user_id'], recs)
+    return redirect(url_for('ai_recommendations'))
 
 
 # ── RUN THE APP ───────────────────────────────────────────────────────────────

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - AI Flag Review</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; font-size: 14px; }
+        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
+        .box {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 25px;
+        }
+        h2 { color: #2E4A7A; margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th { background: #2E4A7A; color: white; padding: 10px 12px; text-align: left; }
+        td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+        tr:last-child td { border-bottom: none; }
+        .badge-pending { background: #fff3cd; color: #856404; padding: 3px 10px; border-radius: 12px; font-size: 12px; }
+        .badge-reviewed { background: #d4edda; color: #155724; padding: 3px 10px; border-radius: 12px; font-size: 12px; }
+        button {
+            background: #2E4A7A;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        button:hover { background: #1d3057; }
+        .filter-links { margin-bottom: 20px; font-size: 14px; }
+        .filter-links a { color: #2E4A7A; margin-right: 15px; text-decoration: none; font-weight: bold; }
+        .filter-links a:hover { text-decoration: underline; }
+        .empty-msg { color: #888; font-style: italic; }
+    </style>
+</head>
+<body>
+
+<div class="navbar">
+    <h1>College0 — AI Flag Review</h1>
+    <div>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/ai/query">AI Assistant</a>
+        <a href="/logout">Logout</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="box">
+        <h2>Flagged AI Responses</h2>
+
+        <div class="filter-links">
+            <a href="/ai/flags">All</a>
+            <a href="/ai/flags?status=pending">Pending</a>
+            <a href="/ai/flags?status=reviewed">Reviewed</a>
+        </div>
+
+        {% if flags %}
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Query</th>
+                    <th>Flagged By</th>
+                    <th>Reason</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for flag in flags %}
+                <tr>
+                    <td>{{ flag.id }}</td>
+                    <td style="max-width:220px;">{{ flag.query_text }}</td>
+                    <td>{{ flag.flagged_by_name }}</td>
+                    <td>{{ flag.reason }}</td>
+                    <td>
+                        {% if flag.status == 'pending' %}
+                        <span class="badge-pending">Pending</span>
+                        {% else %}
+                        <span class="badge-reviewed">Reviewed</span>
+                        {% endif %}
+                    </td>
+                    <td style="white-space:nowrap;">{{ flag.created_at }}</td>
+                    <td>
+                        {% if flag.status == 'pending' %}
+                        <form method="POST" action="/ai/flags/{{ flag.id }}/resolve">
+                            <button type="submit">Mark Reviewed</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-msg">No flagged responses found.</p>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - AI Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; font-size: 14px; }
+        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
+        .box {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 25px;
+        }
+        h2 { color: #2E4A7A; margin-top: 0; }
+        h3 { color: #2E4A7A; }
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 14px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        button, .btn {
+            background: #2E4A7A;
+            color: white;
+            border: none;
+            padding: 10px 22px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 8px;
+        }
+        button:hover, .btn:hover { background: #1d3057; }
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+        .response-box {
+            background: #e8f4fd;
+            border-left: 4px solid #2E4A7A;
+            padding: 16px;
+            border-radius: 0 6px 6px 0;
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+        .source-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .source-vector_db { background: #d4edda; color: #155724; }
+        .source-llm { background: #fff3cd; color: #856404; }
+        .history-item {
+            border-bottom: 1px solid #eee;
+            padding: 12px 0;
+        }
+        .history-item:last-child { border-bottom: none; }
+        .history-q { font-weight: bold; color: #333; font-size: 14px; }
+        .history-a { color: #555; font-size: 13px; margin-top: 4px; white-space: pre-wrap; }
+        .history-meta { color: #999; font-size: 11px; margin-top: 4px; }
+        .flag-form { margin-top: 8px; }
+        .flag-form input[type=text] {
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+            width: 260px;
+        }
+        .flag-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 6px;
+        }
+        .flag-btn:hover { background: #a71d2a; }
+    </style>
+</head>
+<body>
+
+<div class="navbar">
+    <h1>College0 — AI Assistant</h1>
+    <div>
+        <a href="/dashboard">Dashboard</a>
+        {% if role == 'student' %}
+        <a href="/ai/recommendations">My Recommendations</a>
+        {% endif %}
+        {% if role == 'registrar' %}
+        <a href="/ai/flags">Flag Review</a>
+        {% endif %}
+        <a href="/logout">Logout</a>
+    </div>
+</div>
+
+<div class="container">
+
+    <div class="box">
+        <h2>Ask the AI Assistant</h2>
+        <p style="color:#555; font-size:14px;">Ask about courses, schedules, enrollment, or academic policies.</p>
+
+        {% if error %}
+        <div class="alert-error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="/ai/query">
+            <textarea name="query_text" rows="4" placeholder="e.g. What computer science courses are available this semester?" required></textarea>
+            <br>
+            <button type="submit">Submit Query</button>
+        </form>
+    </div>
+
+    {% if result %}
+    <div class="box">
+        <h3>Response</h3>
+        <span class="source-badge source-{{ result.source }}">
+            {% if result.source == 'vector_db' %}From Course Catalog{% else %}AI Generated{% endif %}
+        </span>
+        <div class="response-box">{{ result.response }}</div>
+
+        {% if result.query_id %}
+        <div class="flag-form">
+            <form method="POST" action="/ai/query/{{ result.query_id }}/flag" style="display:inline;">
+                <input type="text" name="reason" placeholder="Flag reason (optional)">
+                <button type="submit" class="flag-btn">Flag this response</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if history %}
+    <div class="box">
+        <h3>Recent Query History</h3>
+        {% for item in history %}
+        <div class="history-item">
+            <div class="history-q">Q: {{ item.query_text }}</div>
+            <div class="history-a">A: {{ item.response_text }}</div>
+            <div class="history-meta">
+                {{ item.created_at }} &nbsp;|&nbsp;
+                <span class="source-badge source-{{ item.source }}" style="font-size:10px; padding:2px 7px;">
+                    {{ item.source }}
+                </span>
+            </div>
+            <div class="flag-form">
+                <form method="POST" action="/ai/query/{{ item.id }}/flag" style="display:inline;">
+                    <input type="text" name="reason" placeholder="Flag reason">
+                    <button type="submit" class="flag-btn">Flag</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</div>
+</body>
+</html>
