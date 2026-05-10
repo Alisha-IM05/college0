@@ -49,37 +49,85 @@ def seed_data():
 
         # --- Tanzina's semester and courses ---
 
-    # Spring 2026 — setup
+    # ── SPRING 2026 ──────────────────────────────────────────────────────────
+
+
     conn.execute("INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (1, 'Spring 2026', 'setup')")
-    spring = [
-        ('CS101 - Intro to Computing',   'Mon/Wed', 1, '10:00', '11:30', 30),
-        ('CS201 - Data Structures',      'Tue/Thu', 3, '13:00', '14:30', 30),
-        ('MATH101 - Calculus I',         'Mon/Wed', 1, '11:00', '12:30', 30),  # conflicts CS101
-        ('CS999 - Popular Course',       'Fri',     5, '09:00', '11:00',  1),  # full
-        ('ENG101 - English Composition', 'Tue/Thu', 3, '09:00', '10:30', 30),
+
+    # name, time_slot, day_of_week, start, end, capacity
+    spring_courses = [
+        # [A] Normal courses — student1 enrolled, filled to 3+ to survive cancellation
+        ('CS101 - Intro to Computing',      'Mon/Wed', 1, '08:00', '09:30', 30),
+        ('CS201 - Data Structures',         'Tue/Thu', 3, '10:00', '11:30', 30),
+        ('ENG101 - English Composition',    'Fri',     5, '09:00', '11:00', 30),
+        # [B] Conflict testers — both Mon/Wed 13:00-14:30, registering second = conflict
+        ('MATH101 - Calculus I',            'Mon/Wed', 1, '13:00', '14:30', 30),
+        ('PHYS101 - Physics I',             'Mon/Wed', 1, '13:00', '14:30', 30),
+        # [C] Waitlist tester — capacity 1, already has 1 enrolled, join = waitlist
+        ('CS999 - Special Topics',          'Tue/Thu', 3, '15:00', '16:30',  1),
+        # [D] Cancel tester — only student1+student2 enrolled (count=2 < 3), gets cancelled
+        ('CS150 - Intro to Python',         'Wed/Fri', 4, '11:00', '12:30', 30),
+        # [F] Bonus normal survivor
+        ('BUS101 - Business Writing',       'Tue/Thu', 3, '08:00', '09:30', 30),
+        # [E] Special reg replacements — NOT enrolled, active, open seats
+        ('CS220 - Database Systems',        'Mon/Wed', 1, '10:00', '11:30', 30),
+        ('CS230 - Web Development',         'Fri',     5, '13:00', '16:00', 30),
     ]
-    for name, time_slot, day, start, end, cap in spring:
+    for name, time_slot, day, start, end, cap in spring_courses:
         conn.execute(
-            "INSERT OR IGNORE INTO courses (course_name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity, semester_id, enrolled_count, status) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')",
+            """INSERT OR IGNORE INTO courses
+               (course_name, instructor_id, time_slot, day_of_week, start_time, end_time,
+                capacity, semester_id, enrolled_count, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')""",
             (name, instructor['id'], time_slot, day, start, end, cap)
         )
-    conn.execute("UPDATE courses SET enrolled_count = 1 WHERE course_name = 'CS999 - Popular Course' AND semester_id = 1")
 
-    # Fall 2026 — setup
+    # Helper to get course id
+    def get_course(name, sem_id):
+        return conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = ?",
+            (name, sem_id)
+        ).fetchone()
+
+    def get_student(username):
+        return conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+
+    s1 = get_student('student1')
+    s2 = get_student('student2')
+
+
+    # ── FALL 2026 ─────────────────────────────────────────────────────────────
+    # Same structure as Spring for consistency
     conn.execute("INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (2, 'Fall 2026', 'setup')")
-    fall = [
-        ('CS310 - Algorithms',           'Mon/Wed 09:00-10:30', 30),
-        ('CS320 - Operating Systems',    'Tue/Thu 14:00-15:30', 30),
-        ('MATH201 - Linear Algebra',     'Tue/Thu 14:30-16:00', 30),
-        ('CS888 - Advanced Topics',      'Wed/Fri 13:00-14:30',  1),
-        ('ENG201 - Technical Writing',   'Fri 10:00-12:00',     30),
+
+    fall_courses = [
+        # [A] Normal courses — 3+ enrolled, survive
+        ('CS310 - Algorithms',              'Mon/Wed', 1, '08:00', '09:30', 30),
+        ('CS320 - Operating Systems',       'Tue/Thu', 3, '10:00', '11:30', 30),
+        ('ENG201 - Technical Writing',      'Fri',     5, '09:00', '11:00', 30),
+        # [B] Conflict testers — both Tue/Thu 13:00-14:30
+        ('MATH201 - Linear Algebra',        'Tue/Thu', 3, '13:00', '14:30', 30),
+        ('PHYS201 - Physics II',            'Tue/Thu', 3, '13:00', '14:30', 30),
+        # [C] Waitlist tester — capacity 1, full
+        ('CS888 - Advanced Topics',         'Mon/Wed', 1, '15:00', '16:30',  1),
+        # [D] Cancel tester — only 2 enrolled, gets cancelled
+        ('CS350 - Computer Networks',       'Wed/Fri', 4, '11:00', '12:30', 30),
+        # [F] Bonus normal survivor
+        ('BUS201 - Project Management',     'Tue/Thu', 3, '08:00', '09:30', 30),
+        # [E] Special reg replacements — open seats, not enrolled
+        ('CS410 - Machine Learning',        'Mon/Wed', 1, '10:00', '11:30', 30),
+        ('CS420 - Cloud Computing',         'Fri',     5, '13:00', '16:00', 30),
     ]
-    for name, slot, cap in fall:
+    for name, time_slot, day, start, end, cap in fall_courses:
         conn.execute(
-            "INSERT OR IGNORE INTO courses (course_name, instructor_id, time_slot, capacity, semester_id, enrolled_count, status) VALUES (?, ?, ?, ?, 2, 0, 'active')",
-            (name, instructor['id'], slot, cap)
+            """INSERT OR IGNORE INTO courses
+               (course_name, instructor_id, time_slot, day_of_week, start_time, end_time,
+                capacity, semester_id, enrolled_count, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 2, 0, 'active')""",
+            (name, instructor['id'], time_slot, day, start, end, cap)
         )
-    conn.execute("UPDATE courses SET enrolled_count = 1 WHERE course_name = 'CS888 - Advanced Topics' AND semester_id = 2")
+
+
 
     # Taboo words
     for word in ['hate', 'stupid', 'idiot']:

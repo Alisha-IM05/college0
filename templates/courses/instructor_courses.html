@@ -55,6 +55,7 @@
                 <th>Semester</th>
                 <th>Period</th>
                 <th>Enrolled</th>
+                <th>Waitlist</th>
                 <th>Action</th>
             </tr>
             {% for course in courses %}
@@ -64,7 +65,18 @@
                 <td>{{ course['semester_name'] }}</td>
                 <td><span class="badge {{ course['current_period'] }}">{{ course['current_period'] | upper }}</span></td>
                 <td>{{ course['enrolled_count'] }} / {{ course['capacity'] }}</td>
-                <td><a class="btn" href="/courses/{{ course['id'] }}">View Roster</a></td>
+                <td>
+                    {% if course['waitlist_count'] > 0 %}
+                        <span style="background:#e67e22;color:white;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">
+                            {{ course['waitlist_count'] }} waiting
+                        </span>
+                    {% else %}
+                        <span style="color:#888;font-size:13px;">None</span>
+                    {% endif %}
+                </td>
+                <td><a class="btn" href="/courses/{{ course['id'] }}">
+                    {% if course['waitlist_count'] > 0 %}Manage Waitlist{% else %}View Roster{% endif %}
+                </a></td>
             </tr>
             {% endfor %}
         </table>

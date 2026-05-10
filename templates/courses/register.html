@@ -134,6 +134,12 @@
                         {% endif %}
                     </td>
                 </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" style="text-align:center;color:#888;padding:20px;">
+                        Special registration is open, but there are currently no available replacement courses. Please contact the registrar.
+                    </td>
+                </tr>
                 {% endfor %}
             </table>
             {% else %}
@@ -178,21 +184,21 @@
             {% endfor %}
         </table>
         {% endif %}
-        {% if role == 'student' and cancelled_courses %}
+        {% if role == 'student' and cancelled_courses and semester and semester['current_period'] in ['special_registration', 'running', 'grading'] %}
         <h3>⚠️ Cancelled Courses</h3>
         <table>
             <tr>
                 <th>Course</th>
                 <th>Time Slot</th>
                 <th>Instructor</th>
-                <th>Status</th>
+                <th>Reason</th>
             </tr>
             {% for course in cancelled_courses %}
             <tr>
                 <td>{{ course['course_name'] }}</td>
                 <td>{{ course['time_slot'] }} {{ course['start_time'] }}-{{ course['end_time'] }}</td>
                 <td>{{ course['instructor_name'] or 'TBA' }}</td>
-                <td style="color:#cc0000;font-weight:bold;">❌ Cancelled — low enrollment</td>
+                <td style="color:#cc0000;font-weight:bold;">❌ Cancelled due to low enrollment</td>
             </tr>
             {% endfor %}
         </table>

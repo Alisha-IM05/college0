@@ -117,6 +117,17 @@ def create_course(semester_id, name, instructor_id, time_slot, day_of_week, star
 def register_student(student_id, course_id):
     conn = get_db()
     try:
+        # Block students who are no longer active
+        user = conn.execute(
+            "SELECT role, status FROM users WHERE id = ?",
+            (student_id,)
+        ).fetchone()
+        if user and user['role'] == 'graduated':
+            return 'You have graduated and no longer have active student access'
+        if user and user['role'] == 'terminated':
+            return 'Your enrollment has been terminated. Please contact the registrar'
+        if user and user['status'] == 'suspended':
+            return 'Your account is suspended. Please contact the registrar'
         # Get the semester for this course
         semester = conn.execute(
             "SELECT * FROM semesters WHERE id = (SELECT semester_id FROM courses WHERE id = ?)",
@@ -851,7 +862,8 @@ def resolve_graduation(application_id, approved):
                 """
                 UPDATE graduation_applications
                 SET status = 'approved',
-                    resolved_at = CURRENT_TIMESTAMP
+                    resolved_at = CURRENT_TIMESTAMP,
+                    registrar_notes = 'Bachelor''s degree awarded'
                 WHERE id = ?
                 """,
                 (application_id,)
