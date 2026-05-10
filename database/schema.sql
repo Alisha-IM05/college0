@@ -41,13 +41,14 @@ CREATE TABLE IF NOT EXISTS students (
     cumulative_gpa REAL DEFAULT 0.0,
     honor_roll INTEGER DEFAULT 0,
     credits_earned INTEGER DEFAULT 0,
-    special_registration INTEGER DEFAULT 0
+    special_registration INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'probation'))
 );
 
 CREATE TABLE IF NOT EXISTS semesters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    current_period TEXT NOT NULL DEFAULT 'setup' CHECK(current_period IN ('setup', 'registration', 'running', 'grading')),
+    current_period TEXT NOT NULL DEFAULT 'setup' CHECK(current_period IN ('setup', 'registration', 'special_registration', 'running', 'grading')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -92,7 +93,8 @@ CREATE TABLE IF NOT EXISTS waitlist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id INTEGER NOT NULL,
     course_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,          -- FIFO order, starting at 1
+    position INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'admitted', 'denied')),
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES users(id),
     FOREIGN KEY (course_id) REFERENCES courses(id)

@@ -24,6 +24,8 @@ def advance_period(semester_id):
         current_period = semester["current_period"]
         # If the semester is already in the last period, create a new semester
         if current_period == "grading":
+            # Warn any instructors who didn't grade all enrolled students
+            warn_instructors_missing_grades(semester_id)
             current_name = semester["name"]
             if "Spring" in current_name:
                 year = int(current_name.split(" ")[1])
@@ -552,6 +554,53 @@ def warn_underenrolled_students(semester_id):
         conn.close()
 
 
+# Warn instructors who did not submit grades for all enrolled students
+# Called automatically when the grading period ends
+# Skips cancelled courses — only active courses are checked
+# Returns nothing (just updates the warnings table)
+def warn_instructors_missing_grades(semester_id):
+    conn = get_db()
+    try:
+        # Get all active courses for this semester
+        courses = conn.execute(
+            """SELECT * FROM courses
+               WHERE semester_id = ? AND status = 'active'""",
+            (semester_id,)
+        ).fetchall()
+        for course in courses:
+            # Get all students enrolled in this course
+            enrolled = conn.execute(
+                """SELECT student_id FROM enrollments
+                   WHERE course_id = ? AND status = 'enrolled'""",
+                (course['id'],)
+            ).fetchall()
+            # No students enrolled — nothing to grade, skip
+            if not enrolled:
+                continue
+            # Check each enrolled student for a submitted grade
+            missing = []
+            for e in enrolled:
+                grade = conn.execute(
+                    "SELECT id FROM grades WHERE student_id = ? AND course_id = ?",
+                    (e['student_id'], course['id'])
+                ).fetchone()
+                if grade is None:
+                    missing.append(e['student_id'])
+            # If any students are missing grades, warn the instructor
+            if missing:
+                conn.execute(
+                    "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+                    (
+                        course['instructor_id'],
+                        f'Grades were not submitted for all enrolled students in '
+                        f'{course["course_name"]} before the grading period ended.'
+                    )
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # Submit a grade for a student
 # Only allowed during the grading period
 # Updates the student's GPA after the grade is saved
@@ -652,13 +701,11 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
         if class_gpa is not None:
             if class_gpa > 3.5 or class_gpa < 2.5:
                 conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
+                    "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
                     (
                         instructor_id,
-                        f'Your course GPA of {class_gpa:.2f} has been flagged for registrar review (outside 2.5–3.5 range)'
+                        f'Class GPA of {class_gpa:.2f} is outside the expected range (2.5–3.5). '
+                        f'Registrar review required — please provide justification.'
                     )
                 )
                 conn.commit()
