@@ -1,7 +1,7 @@
 import os
 import csv
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from database.db import get_db
 
 # ── BLOCK 1: UI, Query Logging & Rollback Safety ──────────────────────────────
@@ -38,18 +38,35 @@ def log_query(user_id, query_text, response_text, source, role_at_query):
         db.close()
 
 
-def submit_query(user_id, role, query_text):
-    # K-003: Single entry point — all security gates run here before the RAG pipeline
+def submit_query(user_id, _role, query_text):
+    # K-003: Single entry point — all security gates run here before the RAG pipeline.
+    # `role` is accepted from the caller for API compatibility but is NEVER trusted for
+    # security decisions — we always fetch the current role from the DB (K-007 fix).
 
-    # K-001: Input validation
+    # K-001: Input validation first — cheapest check, no DB hit
     valid, error = validate_query(query_text)
     if not valid:
         return {"error": error, "response": None, "source": None, "query_id": None}
 
-    # K-007: Block suspended / terminated / graduated accounts
-    eligible, reason = check_user_ai_eligibility(user_id)
-    if not eligible:
-        return {"error": reason, "response": None, "source": None, "query_id": None}
+    # K-007 / Source-of-Truth fix: fetch live role from DB, ignore session-passed role
+    db = get_db()
+    try:
+        user_row = db.execute(
+            "SELECT role FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    finally:
+        db.close()
+
+    if not user_row:
+        return {"error": "User not found.", "response": None, "source": None, "query_id": None}
+
+    fresh_role = user_row["role"]
+    _BLOCKED = ("suspended", "terminated", "graduated")
+    if fresh_role in _BLOCKED:
+        return {
+            "error": f"AI access is not available for {fresh_role} accounts.",
+            "response": None, "source": None, "query_id": None,
+        }
 
     # K-008: Rate limit — 20 queries per rolling hour
     if not check_rate_limit(user_id):
@@ -58,8 +75,8 @@ def submit_query(user_id, role, query_text):
             "response": None, "source": None, "query_id": None,
         }
 
-    # K-005: Role-based query filter
-    allowed, deny_reason = filter_query_by_role(query_text, role)
+    # K-005: Role filter — uses fresh_role, NOT the session-passed role
+    allowed, deny_reason = filter_query_by_role(query_text, fresh_role)
     if not allowed:
         return {"error": deny_reason, "response": None, "source": None, "query_id": None}
 
@@ -67,10 +84,10 @@ def submit_query(user_id, role, query_text):
     response_text = f"[AI stub] You asked: {query_text.strip()}"
     source = "vector_db"
 
-    # K-006: Strip taboo words from the response before logging or displaying
+    # K-006: Strip taboo words from response before logging or displaying
     response_text = filter_taboo_words(response_text)
 
-    query_id = log_query(user_id, query_text, response_text, source, role)
+    query_id = log_query(user_id, query_text, response_text, source, fresh_role)
     return {"response": response_text, "source": source, "query_id": query_id, "error": None}
 
 
@@ -106,38 +123,56 @@ def get_role_context(role):
     return ROLE_CONTEXTS.get(role, ROLE_CONTEXTS["visitor"])
 
 
-_VISITOR_BLOCKED_TOPICS = [
-    "grade", "gpa", "my enrollment", "my courses", "withdraw",
-    "waitlist", "transcript", "financial aid", "tuition balance",
-]
 _ADMIN_ONLY_PHRASES = [
     "all users", "all students", "delete", "drop table",
     "admin panel", "user list", "all records",
 ]
 
+# K-005: Private academic keywords visitors must never see
+_VISITOR_PRIVATE_KEYWORDS = [
+    "gpa", "grade", "grades", "my grade",
+    "enrollment", "enrolled", "my enrollment",
+    "transcript", "my courses", "my schedule",
+    "withdraw", "waitlist", "financial aid", "tuition balance",
+]
+
+# Topics that students/instructors cannot bulk-export
+_STUDENT_BULK_BLOCKED = [
+    "list all grades", "dump all", "export all",
+]
+
 
 def filter_query_by_role(query_text, role):
-    # K-005: Returns (allowed: bool, reason: str)
+    # K-005: Returns (allowed: bool, reason: str).
+    # fresh_role from the DB is passed in — never the session value.
+    # Any unrecognised role is treated as visitor (most restrictive).
     q = query_text.lower()
 
-    # Registrar has unrestricted access
+    # Registrar has unrestricted AI access
     if role == "registrar":
         return True, ""
 
-    # Block admin-only phrases for everyone except registrar
+    # Block admin-only operations for every non-registrar role
     for phrase in _ADMIN_ONLY_PHRASES:
         if phrase in q:
             return False, "That query is restricted to administrators."
 
-    # Visitors may only ask about general course and program information
-    if role == "visitor":
-        for topic in _VISITOR_BLOCKED_TOPICS:
-            if topic in q:
+    # Visitor (or any unrecognised role) — block all private academic data keywords
+    known_roles = ("student", "instructor", "registrar", "suspended", "terminated", "graduated")
+    if role not in known_roles or role == "visitor":
+        for keyword in _VISITOR_PRIVATE_KEYWORDS:
+            if keyword in q:
                 return (
                     False,
-                    f"Visitors can only ask about general course and program info. "
-                    f"Please log in to access personal academic details.",
+                    f"Role restricted: visitors cannot query private academic data "
+                    f"(matched keyword: '{keyword}'). Please log in with a student or instructor account.",
                 )
+
+    # Students cannot bulk-export data
+    if role == "student":
+        for phrase in _STUDENT_BULK_BLOCKED:
+            if phrase in q:
+                return False, "That query is not permitted for student accounts."
 
     return True, ""
 
@@ -176,7 +211,7 @@ def check_rate_limit(user_id, max_per_hour=20):
     # K-008: Returns (allowed: bool) — max N queries per rolling hour
     db = get_db()
     try:
-        one_hour_ago = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         count = db.execute(
             "SELECT COUNT(*) FROM ai_queries WHERE user_id = ? AND created_at >= ?",
             (user_id, one_hour_ago)
@@ -213,7 +248,7 @@ def get_all_flags(status_filter=None):
         db.close()
 
 
-def resolve_flag(flag_id, resolver_user_id):
+def resolve_flag(flag_id, _resolver_user_id):
     # K-022: Marks an ai_flags row as 'reviewed'
     db = get_db()
     try:
@@ -280,7 +315,7 @@ def is_relevant_result(similarity_score, threshold=0.75):
     return similarity_score <= (1.0 - threshold)
 
 
-def query_vector_db(query_text, role, n_results=3):
+def query_vector_db(query_text, _role, n_results=3):
     # K-011: Returns list of relevant document strings or empty list
     if _chroma_collection is None:
         return []
@@ -312,8 +347,8 @@ def query_llm(query_text, context, role):
         messages.append({"role": "user", "content": query_text})
         response = client.chat.completions.create(model="gpt-3.5-turbo", messages=messages, max_tokens=400)
         return response.choices[0].message.content.strip(), "llm"
-    except Exception as e:
-        return f"AI service is temporarily unavailable. Please try again later.", "llm"
+    except Exception:
+        return "AI service is temporarily unavailable. Please try again later.", "llm"
 
 
 def attach_hallucination_warning(response_text, source):
@@ -507,7 +542,7 @@ def run_smoke_tests():
     except Exception as e:
         results["validate_query"] = f"error: {e}"
     try:
-        history = get_query_history(1, limit=1)
+        get_query_history(1, limit=1)
         results["get_query_history"] = "pass"
     except Exception as e:
         results["get_query_history"] = f"error: {e}"
