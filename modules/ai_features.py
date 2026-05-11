@@ -1,13 +1,25 @@
 import os
+import re
 import csv
 import time
 from datetime import datetime, timedelta, timezone
 from database.db import get_db
 
+# K-013: Hardcoded baseline — always filtered regardless of DB table contents.
+# The DB taboo_words table adds to this list at runtime (managed by the registrar).
+TABOO_WORDS = [
+    "stupid", "idiot", "dumb", "moron", "hate",
+    "worthless", "incompetent", "cheat", "cheater",
+    "plagiarize", "plagiarism", "expel", "expelled",
+    "loser", "failure",
+]
+
+DB_PATH = os.path.expanduser("~/college0/database/chroma_db")  # absolute chroma path — shared with seed_chroma.py
+
 # ── BLOCK 1: UI, Query Logging & Rollback Safety ──────────────────────────────
 
 def validate_query(query_text):
-    # K-001: Input validation — returns (True, None) or (False, error_message)
+    # K-001
     if not query_text or not query_text.strip():
         return False, "Query cannot be empty."
     if len(query_text.strip()) < 3:
@@ -26,7 +38,7 @@ def log_query(user_id, query_text, response_text, source, role_at_query):
             """INSERT INTO ai_queries
                (user_id, query_text, response_text, source, role_at_query)
                VALUES (?, ?, ?, ?, ?)""",
-            (user_id, query_text.strip(), response_text, source, role_at_query)
+            (user_id, query_text.strip(), response_text, source, role_at_query),
         )
         query_id = cursor.lastrowid
         db.commit()
@@ -38,17 +50,17 @@ def log_query(user_id, query_text, response_text, source, role_at_query):
         db.close()
 
 
-def submit_query(user_id, _role, query_text):
-    # K-003: Single entry point — all security gates run here before the RAG pipeline.
-    # `role` is accepted from the caller for API compatibility but is NEVER trusted for
-    # security decisions — we always fetch the current role from the DB (K-007 fix).
+def submit_query(user_id, _session_role, query_text):
+    # K-003: Single entry point — all security gates run here.
+    # _session_role is accepted for API compatibility but NEVER trusted.
+    # We always fetch the live role from database/college0.db.
 
-    # K-001: Input validation first — cheapest check, no DB hit
+    # K-001: Cheapest check first — no DB hit
     valid, error = validate_query(query_text)
     if not valid:
         return {"error": error, "response": None, "source": None, "query_id": None}
 
-    # K-007 / Source-of-Truth fix: fetch live role from DB, ignore session-passed role
+    # K-007 / Source-of-Truth: read live role from database/college0.db
     db = get_db()
     try:
         user_row = db.execute(
@@ -61,12 +73,17 @@ def submit_query(user_id, _role, query_text):
         return {"error": "User not found.", "response": None, "source": None, "query_id": None}
 
     fresh_role = user_row["role"]
-    _BLOCKED = ("suspended", "terminated", "graduated")
-    if fresh_role in _BLOCKED:
+
+    # K-007: Hard-block suspended / terminated / graduated accounts
+    if fresh_role in ("suspended", "terminated", "graduated"):
         return {
             "error": f"AI access is not available for {fresh_role} accounts.",
             "response": None, "source": None, "query_id": None,
         }
+
+    # Role alignment: any DB role not in the recognised set is treated as "visitor"
+    # in Python logic only — "visitor" is never stored in database/college0.db.
+    effective_role = fresh_role if fresh_role in _KNOWN_DB_ROLES else "visitor"
 
     # K-008: Rate limit — 20 queries per rolling hour
     if not check_rate_limit(user_id):
@@ -75,20 +92,38 @@ def submit_query(user_id, _role, query_text):
             "response": None, "source": None, "query_id": None,
         }
 
-    # K-005: Role filter — uses fresh_role, NOT the session-passed role
-    allowed, deny_reason = filter_query_by_role(query_text, fresh_role)
+    # K-005: Role filter — uses effective_role derived from live DB value
+    allowed, deny_reason = filter_query_by_role(query_text, effective_role)
     if not allowed:
         return {"error": deny_reason, "response": None, "source": None, "query_id": None}
 
-    # Block 3 RAG pipeline (wired in Block 3; stub response for now)
-    response_text = f"[AI stub] You asked: {query_text.strip()}"
-    source = "vector_db"
+    # K-016/K-019: If a student asks for recommendations, generate them inline
+    if effective_role == "student" and _is_recommendation_query(query_text):
+        recs = generate_recommendations(user_id)
+        if recs:
+            lines = "\n".join(
+                f"- {r['course']['course_name']}: {r['reason']}" for r in recs
+            )
+            response_text = f"Based on your academic profile, here are your recommended courses:\n{lines}"
+            source = "vector_db"
+        else:
+            response_text, source = run_rag_pipeline(query_text, effective_role)
+    else:
+        # K-013: Full RAG pipeline — ChromaDB (text-embedding-004) → gemini-1.5-flash fallback
+        response_text, source = run_rag_pipeline(query_text, effective_role)
 
-    # K-006: Strip taboo words from response before logging or displaying
-    response_text = filter_taboo_words(response_text)
+    # K-013: Scrub taboo words — filtered text is logged so DB and UI always match
+    response_text = apply_taboo_filter(response_text)
 
-    query_id = log_query(user_id, query_text, response_text, source, fresh_role)
+    query_id = log_query(user_id, query_text, response_text, source, effective_role)
     return {"response": response_text, "source": source, "query_id": query_id, "error": None}
+
+
+def _is_recommendation_query(query_text):
+    # Helper: True if the query is asking for course recommendations
+    q = query_text.lower()
+    keywords = ["recommend", "suggestion", "what course should", "which course", "should i take"]
+    return any(kw in q for kw in keywords)
 
 
 def get_query_history(user_id, limit=20):
@@ -101,7 +136,7 @@ def get_query_history(user_id, limit=20):
                WHERE user_id = ?
                ORDER BY created_at DESC
                LIMIT ?""",
-            (user_id, limit)
+            (user_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -110,16 +145,20 @@ def get_query_history(user_id, limit=20):
 
 # ── BLOCK 2: Security & Role-Based Permissions ────────────────────────────────
 
+# "visitor" is a Python-only concept — never stored in database/college0.db.
+# Any DB role not in _KNOWN_DB_ROLES is mapped to "visitor" inside submit_query.
+_KNOWN_DB_ROLES = {"student", "instructor", "registrar", "suspended", "terminated", "graduated"}
+
 ROLE_CONTEXTS = {
-    "visitor":    {"topics": ["courses", "programs", "campus info"], "can_see_grades": False, "can_see_enrollment": False},
-    "student":    {"topics": ["courses", "grades", "enrollment", "recommendations"], "can_see_grades": True, "can_see_enrollment": True},
-    "instructor": {"topics": ["courses", "grades", "students", "schedules"], "can_see_grades": True, "can_see_enrollment": True},
-    "registrar":  {"topics": ["all"], "can_see_grades": True, "can_see_enrollment": True},
+    "visitor":    {"topics": ["courses", "programs", "campus info"],                       "can_see_grades": False, "can_see_enrollment": False},
+    "student":    {"topics": ["courses", "grades", "enrollment", "recommendations"],       "can_see_grades": True,  "can_see_enrollment": True},
+    "instructor": {"topics": ["courses", "grades", "students", "schedules"],               "can_see_grades": True,  "can_see_enrollment": True},
+    "registrar":  {"topics": ["all"],                                                       "can_see_grades": True,  "can_see_enrollment": True},
 }
 
 
 def get_role_context(role):
-    # K-004: Returns allowed topic dict for the given role
+    # K-004: Unknown roles fall back to visitor (most restrictive)
     return ROLE_CONTEXTS.get(role, ROLE_CONTEXTS["visitor"])
 
 
@@ -128,47 +167,40 @@ _ADMIN_ONLY_PHRASES = [
     "admin panel", "user list", "all records",
 ]
 
-# K-005: Private academic keywords visitors must never see
-_VISITOR_PRIVATE_KEYWORDS = [
+# K-004: Private academic keywords — visitors may not query these
+_VISITOR_BLOCKED_KEYWORDS = [
     "gpa", "grade", "grades", "my grade",
     "enrollment", "enrolled", "my enrollment",
     "transcript", "my courses", "my schedule",
     "withdraw", "waitlist", "financial aid", "tuition balance",
 ]
 
-# Topics that students/instructors cannot bulk-export
-_STUDENT_BULK_BLOCKED = [
-    "list all grades", "dump all", "export all",
-]
+_STUDENT_BULK_BLOCKED = ["list all grades", "dump all", "export all"]
 
 
 def filter_query_by_role(query_text, role):
     # K-005: Returns (allowed: bool, reason: str).
-    # fresh_role from the DB is passed in — never the session value.
-    # Any unrecognised role is treated as visitor (most restrictive).
+    # `role` is always effective_role from submit_query — never the raw session value.
     q = query_text.lower()
 
-    # Registrar has unrestricted AI access
     if role == "registrar":
         return True, ""
 
-    # Block admin-only operations for every non-registrar role
     for phrase in _ADMIN_ONLY_PHRASES:
         if phrase in q:
             return False, "That query is restricted to administrators."
 
-    # Visitor (or any unrecognised role) — block all private academic data keywords
-    known_roles = ("student", "instructor", "registrar", "suspended", "terminated", "graduated")
-    if role not in known_roles or role == "visitor":
-        for keyword in _VISITOR_PRIVATE_KEYWORDS:
+    # K-004: Visitor restriction — only the course catalog, no personal/staff records
+    if role == "visitor":
+        for keyword in _VISITOR_BLOCKED_KEYWORDS:
             if keyword in q:
                 return (
                     False,
-                    f"Role restricted: visitors cannot query private academic data "
-                    f"(matched keyword: '{keyword}'). Please log in with a student or instructor account.",
+                    f"Access restricted: visitors can only query the course catalog and general "
+                    f"program information (blocked keyword: '{keyword}'). "
+                    f"Please log in with a student or instructor account.",
                 )
 
-    # Students cannot bulk-export data
     if role == "student":
         for phrase in _STUDENT_BULK_BLOCKED:
             if phrase in q:
@@ -177,30 +209,37 @@ def filter_query_by_role(query_text, role):
     return True, ""
 
 
-def filter_taboo_words(text):
-    # K-006: Replaces taboo words (from DB) with [FILTERED] in AI responses
+def apply_taboo_filter(text):
+    # K-013: Scrub response text using whole-word, case-insensitive regex.
+    # Merges the hardcoded TABOO_WORDS baseline with the registrar-managed DB table.
+    # Filtered words are replaced with **** so the UI never shows raw taboo content.
+    # The filtered string is what gets logged — logs always match the UI.
     db = get_db()
     try:
-        rows = db.execute("SELECT word FROM taboo_words").fetchall()
-        for row in rows:
-            word = row["word"]
-            text = text.replace(word, "[FILTERED]")
-            text = text.replace(word.capitalize(), "[FILTERED]")
-            text = text.replace(word.upper(), "[FILTERED]")
-        return text
+        db_words = [r["word"] for r in db.execute("SELECT word FROM taboo_words").fetchall()]
     finally:
         db.close()
 
+    all_words = set(w.lower() for w in TABOO_WORDS) | set(w.lower() for w in db_words)
+    for word in all_words:
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        text = pattern.sub("****", text)
+    return text
+
+
+def filter_taboo_words(text):
+    # Legacy alias — kept so any external callers don't break.
+    return apply_taboo_filter(text)
+
 
 def check_user_ai_eligibility(user_id):
-    # K-007: Blocks suspended/terminated/graduated users from AI access
+    # K-007: Standalone eligibility check (called from routes outside submit_query)
     db = get_db()
     try:
-        user = db.execute("SELECT role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        user = db.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
         if not user:
             return False, "User not found."
-        blocked_roles = ("suspended", "terminated", "graduated")
-        if user["role"] in blocked_roles:
+        if user["role"] in ("suspended", "terminated", "graduated"):
             return False, f"AI access is not available for {user['role']} accounts."
         return True, ""
     finally:
@@ -208,13 +247,15 @@ def check_user_ai_eligibility(user_id):
 
 
 def check_rate_limit(user_id, max_per_hour=20):
-    # K-008: Returns (allowed: bool) — max N queries per rolling hour
+    # K-008: Returns True if the user is within the hourly query cap
     db = get_db()
     try:
-        one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        one_hour_ago = (
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
         count = db.execute(
             "SELECT COUNT(*) FROM ai_queries WHERE user_id = ? AND created_at >= ?",
-            (user_id, one_hour_ago)
+            (user_id, one_hour_ago),
         ).fetchone()[0]
         return count < max_per_hour
     finally:
@@ -222,7 +263,7 @@ def check_rate_limit(user_id, max_per_hour=20):
 
 
 def get_all_flags(status_filter=None):
-    # K-020: Returns ai_flags rows; registrar/admin view
+    # K-020: Returns ai_flags rows for the registrar view
     db = get_db()
     try:
         if status_filter:
@@ -233,7 +274,7 @@ def get_all_flags(status_filter=None):
                    JOIN ai_queries q ON f.query_id = q.id
                    WHERE f.status = ?
                    ORDER BY f.created_at DESC""",
-                (status_filter,)
+                (status_filter,),
             ).fetchall()
         else:
             rows = db.execute(
@@ -253,10 +294,7 @@ def resolve_flag(flag_id, _resolver_user_id):
     db = get_db()
     try:
         db.execute("BEGIN")
-        db.execute(
-            "UPDATE ai_flags SET status = 'reviewed' WHERE id = ?",
-            (flag_id,)
-        )
+        db.execute("UPDATE ai_flags SET status = 'reviewed' WHERE id = ?", (flag_id,))
         db.commit()
     except Exception:
         db.rollback()
@@ -265,39 +303,96 @@ def resolve_flag(flag_id, _resolver_user_id):
         db.close()
 
 
-# ── BLOCK 3: The Brain — ChromaDB + OpenAI + Filters ─────────────────────────
+# ── BLOCK 3: The Brain — ChromaDB + Google Gemini ────────────────────────────
 
 _chroma_collection = None
+_chroma_ef = None   # stored globally so query_vector_db uses embed_query() task type
+
+# ChromaDB persist dir — resolved from DB_PATH at the top of this file
+_CHROMA_PERSIST_DIR = DB_PATH
+
+class SimpleGoogleEmbeddingFunction:
+    """Manual wrapper for Google Embeddings to ensure compatibility with Gemini."""
+    def __init__(self, api_key, model_name="models/gemini-embedding-001"):
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        self.model_name = model_name
+        self._genai = genai
+
+    def __call__(self, input):
+        # Called by ChromaDB for batch document embedding during upsert
+        # input is a list of strings; returns a list of embedding vectors
+        docs = input if isinstance(input, list) else [input]
+        embeddings = []
+        for doc in docs:
+            response = self._genai.embed_content(
+                model="models/gemini-embedding-001",
+                content=doc,
+                task_type="RETRIEVAL_DOCUMENT",
+            )
+            embeddings.append(response['embedding'])
+        return embeddings
+
+    def embed_query(self, input):
+        # Called explicitly for a single query string — returns one flat list of floats
+        response = self._genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=input,
+            task_type="RETRIEVAL_QUERY",
+        )
+        return response['embedding']
+
+    def name(self) -> str:
+        return "SimpleGoogleEmbeddingFunction"
 
 
 def init_vector_db():
-    # K-009: Creates/loads the ChromaDB collection (call once at app startup)
-    global _chroma_collection
+    # K-009: Creates/loads ChromaDB collection at app startup.
+    # Absolute path used here to guarantee it matches seed_chroma.py exactly,
+    # regardless of the working directory at launch time.
+    global _chroma_collection, _chroma_ef
     try:
         import chromadb
-        persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-        client = chromadb.PersistentClient(path=persist_dir)
-        _chroma_collection = client.get_or_create_collection("college0_knowledge")
+
+        os.makedirs(_CHROMA_PERSIST_DIR, exist_ok=True)
+
+        ef = SimpleGoogleEmbeddingFunction(api_key=os.getenv("GOOGLE_API_KEY"))
+        _chroma_ef = ef
+
+        client = chromadb.PersistentClient(path=_CHROMA_PERSIST_DIR)
+        _chroma_collection = client.get_or_create_collection(
+            name="college0_knowledge",
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+        print(f"Vector DB loaded: {_chroma_collection.count()} docs in collection.")
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Vector DB Init Error: {e}")
         _chroma_collection = None
+        _chroma_ef = None
         return False
 
 
 def seed_vector_db():
-    # K-010: Reads courses from DB and upserts embeddings into ChromaDB
+    # K-010: Reads active courses from database/college0.db and upserts to ChromaDB.
     if _chroma_collection is None:
         return False
     db = get_db()
     try:
         courses = db.execute(
-            "SELECT id, course_name, time_slot, day_of_week FROM courses WHERE status = 'active'"
+            """SELECT id, course_name, time_slot, day_of_week,
+                      start_time, end_time, capacity, enrolled_count
+               FROM courses WHERE status = 'active'"""
         ).fetchall()
         docs, ids, metas = [], [], []
         for c in courses:
+            seats_left = c["capacity"] - c["enrolled_count"]
             doc = (
                 f"Course: {c['course_name']}. "
-                f"Schedule: {c['time_slot']} (day {c['day_of_week']}). "
+                f"Schedule: {c['time_slot']}, day {c['day_of_week']}, "
+                f"{c['start_time']}–{c['end_time']}. "
+                f"Capacity: {c['capacity']} seats, {seats_left} available. "
                 f"Course ID: {c['id']}."
             )
             docs.append(doc)
@@ -305,54 +400,91 @@ def seed_vector_db():
             metas.append({"type": "course", "course_id": c["id"]})
         if docs:
             _chroma_collection.upsert(documents=docs, ids=ids, metadatas=metas)
-        return True
+        return len(docs)
     finally:
         db.close()
 
 
-def is_relevant_result(similarity_score, threshold=0.75):
-    # K-023: True if vector result meets quality threshold (ChromaDB returns distance, lower = better)
-    return similarity_score <= (1.0 - threshold)
+def is_relevant_result(distance, max_distance=0.9):
+    # K-023: cosine distance < 0.9 — emergency-wide threshold to confirm data is reachable
+    return distance < max_distance
 
 
 def query_vector_db(query_text, _role, n_results=3):
-    # K-011: Returns list of relevant document strings or empty list
     if _chroma_collection is None:
+        print("DEBUG: ChromaDB collection is None — init_vector_db() may have failed.")
         return []
     try:
-        results = _chroma_collection.query(query_texts=[query_text], n_results=n_results)
+        # Use embed_query() (retrieval_query task type) for better similarity scores.
+        # ChromaDB's __call__ uses retrieval_document task type — wrong for queries.
+        if _chroma_ef is not None:
+            query_embedding = _chroma_ef.embed_query(query_text)
+            results = _chroma_collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+            )
+        else:
+            results = _chroma_collection.query(
+                query_texts=[query_text],
+                n_results=n_results,
+            )
+        print(f"DEBUG: Raw Distances found: {results['distances']}")
         docs = results.get("documents", [[]])[0]
         distances = results.get("distances", [[]])[0]
-        relevant = [doc for doc, dist in zip(docs, distances) if is_relevant_result(dist)]
-        return relevant
-    except Exception:
+        print(f"DEBUG: ChromaDB raw distances for query '{query_text[:60]}': {distances}")
+        relevant_docs = []
+        for doc, dist in zip(docs, distances):
+            if is_relevant_result(dist):
+                relevant_docs.append(doc)
+            else:
+                print(f"DEBUG: Filtered out (dist={dist:.4f} > 0.6): {doc[:60]}...")
+        print(f"DEBUG: {len(relevant_docs)}/{len(docs)} docs passed threshold.")
+        return relevant_docs
+    except Exception as e:
+        print(f"ChromaDB Query Error: {e}")
         return []
 
 
 def query_llm(query_text, context, role):
-    # K-012: OpenAI fallback when vector DB has no good match
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        role_context = get_role_context(role)
-        system_prompt = (
-            f"You are an academic assistant for College0. "
-            f"The user is a {role}. "
-            f"Answer only about: {', '.join(role_context['topics'])}. "
-            f"Be concise and factual."
+    # K-012: gemini-2.5-flash with grounded context from ChromaDB
+    print(f"DEBUG: Context sent to LLM ({len(context)} docs): {context}")
+
+    # Empty context → polite "not found" instead of hallucinating
+    if not context:
+        return (
+            "I couldn't find specific information about that in the College0 course catalog. "
+            "Please check the course portal or contact the registrar's office directly.",
+            "llm",
         )
-        messages = [{"role": "system", "content": system_prompt}]
-        if context:
-            messages.append({"role": "user", "content": f"Context:\n{chr(10).join(context)}"})
-        messages.append({"role": "user", "content": query_text})
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=messages, max_tokens=400)
-        return response.choices[0].message.content.strip(), "llm"
-    except Exception:
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+        role_ctx       = get_role_context(role)
+        allowed_topics = ", ".join(role_ctx["topics"])
+        context_block  = "\n".join(f"- {c}" for c in context)
+
+        prompt = "\n".join([
+            "You are the College0 Academic Assistant.",
+            f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
+            "You MUST use the course catalog context below to answer.",
+            "If the context contains schedule or seat availability, always state it explicitly.",
+            f"\nCourse catalog context:\n{context_block}",
+            f"\nUser question: {query_text}",
+        ])
+
+        model    = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip(), "llm"
+    except Exception as e:
+        print(f"LLM Error: {e}")
         return "AI service is temporarily unavailable. Please try again later.", "llm"
 
 
 def attach_hallucination_warning(response_text, source):
-    # K-021: Appends disclaimer when response came from LLM fallback
+    # K-021: Appends disclaimer for LLM responses
     if source == "llm":
         return (
             response_text
@@ -363,13 +495,27 @@ def attach_hallucination_warning(response_text, source):
 
 
 def run_rag_pipeline(query_text, role):
-    # K-013: Full pipeline — vector DB first, LLM fallback
+    # K-013: Full RAG pipeline — retrieve then always generate via LLM.
+    # Passing context (even an empty list) lets the LLM synthesise a proper answer
+    # rather than returning raw catalog chunks or saying "I don't know the schedule."
     vector_results = query_vector_db(query_text, role)
-    if vector_results:
-        response = "Based on our course catalog:\n" + "\n".join(f"- {r}" for r in vector_results)
-        return response, "vector_db"
-    response, source = query_llm(query_text, [], role)
-    return response, source
+    response_text, _ = query_llm(query_text, vector_results, role)
+    source = "vector_db" if vector_results else "llm"
+    response_text = attach_hallucination_warning(response_text, source)
+    return response_text, source
+
+
+def refresh_vector_db():
+    # K-024: Clears and re-seeds ChromaDB
+    if _chroma_collection is None:
+        return False
+    try:
+        existing = _chroma_collection.get()
+        if existing["ids"]:
+            _chroma_collection.delete(ids=existing["ids"])
+        return seed_vector_db()
+    except Exception:
+        return False
 
 
 # ── BLOCK 4: Feedback Loop ────────────────────────────────────────────────────
@@ -381,7 +527,7 @@ def flag_query(query_id, flagged_by_user_id, reason):
         db.execute("BEGIN")
         cursor = db.execute(
             "INSERT INTO ai_flags (query_id, flagged_by, reason) VALUES (?, ?, ?)",
-            (query_id, flagged_by_user_id, reason.strip())
+            (query_id, flagged_by_user_id, reason.strip()),
         )
         flag_id = cursor.lastrowid
         db.commit()
@@ -401,59 +547,53 @@ def get_flags_for_query(query_id):
             """SELECT f.*, u.username AS flagged_by_name
                FROM ai_flags f JOIN users u ON f.flagged_by = u.id
                WHERE f.query_id = ?""",
-            (query_id,)
+            (query_id,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         db.close()
 
 
-def refresh_vector_db():
-    # K-024: Clears and re-seeds ChromaDB after course catalog changes
-    if _chroma_collection is None:
-        return False
-    try:
-        existing = _chroma_collection.get()
-        if existing["ids"]:
-            _chroma_collection.delete(ids=existing["ids"])
-        return seed_vector_db()
-    except Exception:
-        return False
-
-
 # ── BLOCK 5: Recommender & Final Testing ─────────────────────────────────────
 
 def score_courses_for_student(student_id, available_courses):
-    # K-019: Returns sorted list of (course_dict, score, reason) — avoid duplicates, grade-appropriate
+    # K-019: Returns sorted list of (course_dict, score, reason)
     db = get_db()
     try:
         enrolled_ids = {
             r["course_id"] for r in db.execute(
                 "SELECT course_id FROM enrollments WHERE student_id = ? AND status = 'enrolled'",
-                (student_id,)
+                (student_id,),
+            ).fetchall()
+        }
+        # K-019: also exclude courses the student already passed (grade != F)
+        completed_ids = {
+            r["course_id"] for r in db.execute(
+                "SELECT course_id FROM grades WHERE student_id = ? AND letter_grade != 'F'",
+                (student_id,),
             ).fetchall()
         }
         grades = db.execute(
             "SELECT numeric_value FROM grades WHERE student_id = ?", (student_id,)
         ).fetchall()
-        avg_grade = (
-            sum(g["numeric_value"] for g in grades) / len(grades) if grades else 75.0
+        # numeric_value is on 0.0–4.0 GPA scale (A=4.0, B=3.0, C=2.0, D=1.0, F=0.0)
+        avg_gpa = (
+            sum(g["numeric_value"] for g in grades) / len(grades) if grades else 2.5
         )
         scored = []
         for course in available_courses:
-            if course["id"] in enrolled_ids:
+            if course["id"] in enrolled_ids or course["id"] in completed_ids:
                 continue
             score = 50
-            reason = "Available course"
-            if avg_grade >= 90:
-                score += 20
-                reason = "Strong academic record — challenging course recommended"
-            elif avg_grade >= 75:
-                score += 10
-                reason = "Good standing — course matches your level"
+            if avg_gpa >= 3.5:
+                score  += 20
+                reason  = "Strong academic record (GPA ≥ 3.5) — challenging course recommended"
+            elif avg_gpa >= 2.5:
+                score  += 10
+                reason  = "Good standing (GPA ≥ 2.5) — course matches your level"
             else:
-                score += 5
-                reason = "Course available for your enrollment"
+                score  += 5
+                reason  = "Course available — consider strengthening your GPA first"
             if course.get("enrolled_count", 0) < course.get("capacity", 30):
                 score += 5
             scored.append((dict(course), score, reason))
@@ -464,12 +604,22 @@ def score_courses_for_student(student_id, available_courses):
 
 
 def generate_recommendations(student_id):
-    # K-016: Queries active courses and scores them for the student
+    # K-016 / L-027: Scores active courses in the current semester only.
+    # Uses the most recently created semester as "current" until get_current_semester() is available.
     db = get_db()
     try:
+        # Use the semester that actually contains active courses (not necessarily the latest one).
+        # Avoids the case where a newly created setup-period semester has no courses yet.
+        sem_row = db.execute(
+            "SELECT semester_id FROM courses WHERE status='active' GROUP BY semester_id ORDER BY semester_id DESC LIMIT 1"
+        ).fetchone()
+        if not sem_row:
+            return []
         courses = db.execute(
             """SELECT id, course_name, time_slot, capacity, enrolled_count
-               FROM courses WHERE status = 'active'"""
+               FROM courses
+               WHERE status = 'active' AND semester_id = ?""",
+            (sem_row["semester_id"],),
         ).fetchall()
         scored = score_courses_for_student(student_id, [dict(c) for c in courses])
         return [
@@ -489,7 +639,7 @@ def save_recommendations(student_id, recommendations):
         for rec in recommendations:
             db.execute(
                 "INSERT INTO recommendations (student_id, course_id, reason) VALUES (?, ?, ?)",
-                (student_id, rec["course"]["id"], rec["reason"])
+                (student_id, rec["course"]["id"], rec["reason"]),
             )
         db.commit()
     except Exception:
@@ -510,7 +660,7 @@ def get_recommendations(student_id):
                JOIN courses c ON r.course_id = c.id
                WHERE r.student_id = ?
                ORDER BY r.generated_at DESC""",
-            (student_id,)
+            (student_id,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -525,7 +675,10 @@ def export_query_log_csv(output_path):
             "SELECT id, user_id, query_text, response_text, source, role_at_query, created_at FROM ai_queries"
         ).fetchall()
         with open(output_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["id", "user_id", "query_text", "response_text", "source", "role_at_query", "created_at"])
+            writer = csv.DictWriter(f, fieldnames=[
+                "id", "user_id", "query_text", "response_text",
+                "source", "role_at_query", "created_at",
+            ])
             writer.writeheader()
             writer.writerows([dict(r) for r in rows])
         return len(rows)
@@ -534,49 +687,64 @@ def export_query_log_csv(output_path):
 
 
 def run_smoke_tests():
-    # L-027: Returns dict of {route_name: status} for all AI routes
+    # L-027: Quick sanity check on all AI functions
     results = {}
-    try:
-        valid, _ = validate_query("test query")
-        results["validate_query"] = "pass" if valid else "fail"
-    except Exception as e:
-        results["validate_query"] = f"error: {e}"
-    try:
-        get_query_history(1, limit=1)
-        results["get_query_history"] = "pass"
-    except Exception as e:
-        results["get_query_history"] = f"error: {e}"
-    try:
-        context = get_role_context("student")
-        results["get_role_context"] = "pass" if context else "fail"
-    except Exception as e:
-        results["get_role_context"] = f"error: {e}"
+    checks = {
+        "validate_query":      lambda: validate_query("test query")[0],
+        "get_query_history":   lambda: bool(get_query_history(1, limit=1) is not None),
+        "get_role_context":    lambda: bool(get_role_context("student")),
+        "filter_query_by_role":lambda: filter_query_by_role("What courses?", "student")[0],
+        "visitor_block":       lambda: not filter_query_by_role("What is my GPA?", "visitor")[0],
+    }
+    for name, fn in checks.items():
+        try:
+            results[name] = "pass" if fn() else "fail"
+        except Exception as e:
+            results[name] = f"error: {e}"
     return results
 
 
 def test_rag_pipeline_integration():
     # L-028: Submits a test query end-to-end and verifies DB row created
-    test_user_id = 1
-    test_role = "student"
-    test_query = "What computer science courses are available?"
-    result = submit_query(test_user_id, test_role, test_query)
+    db = get_db()
+    try:
+        student = db.execute("SELECT id FROM users WHERE role='student' LIMIT 1").fetchone()
+    finally:
+        db.close()
+
+    if not student:
+        return {"status": "fail", "error": "No student user in database/college0.db"}
+
+    result = submit_query(student["id"], "student", "What computer science courses are available?")
     if result.get("query_id"):
         db = get_db()
         try:
             row = db.execute(
                 "SELECT * FROM ai_queries WHERE id = ?", (result["query_id"],)
             ).fetchone()
-            return {"status": "pass", "query_id": result["query_id"], "source": result["source"], "db_row_found": row is not None}
+            return {
+                "status": "pass",
+                "query_id": result["query_id"],
+                "source":   result["source"],
+                "db_row":   row is not None,
+            }
         finally:
             db.close()
     return {"status": "fail", "error": result.get("error")}
 
 
 def test_query_throughput(n=10):
-    # L-029: Submits N test queries and returns average response time in ms
+    # L-029: Returns average response time in ms over N queries
+    db = get_db()
+    try:
+        student = db.execute("SELECT id FROM users WHERE role='student' LIMIT 1").fetchone()
+        uid = student["id"] if student else 1
+    finally:
+        db.close()
+
     times = []
     for i in range(n):
-        start = time.time()
-        submit_query(1, "student", f"Test query number {i}")
-        times.append((time.time() - start) * 1000)
+        t0 = time.time()
+        submit_query(uid, "student", f"Test query number {i}")
+        times.append((time.time() - t0) * 1000)
     return round(sum(times) / len(times), 2)

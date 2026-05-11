@@ -1,6 +1,12 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 from jinja2 import ChoiceLoader, FileSystemLoader
-
+from modules.ai_features import (
+    submit_query, get_query_history,
+    flag_query, get_all_flags, resolve_flag,
+    generate_recommendations, save_recommendations, get_recommendations,
+    init_vector_db,
+    check_user_ai_eligibility, check_rate_limit,filter_query_by_role
+)
 from database.db import init_db, get_db
 
 from modules.conduct import (
@@ -12,13 +18,6 @@ from modules.conduct import (
 
 from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
 
-from modules.ai_features import (
-    submit_query, get_query_history,
-    flag_query, get_flags_for_query, get_all_flags, resolve_flag,
-    generate_recommendations, save_recommendations, get_recommendations,
-    init_vector_db, seed_vector_db, refresh_vector_db,
-)
-
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
@@ -26,9 +25,10 @@ app.jinja_loader = ChoiceLoader([
 
 app.secret_key = 'college0secretkey'
 
-# initialize the database when the app starts
+# initialize the database and vector store when the app starts
 with app.app_context():
     init_db()
+    init_vector_db()   # loads ChromaDB — fails gracefully if GOOGLE_API_KEY is missing
 
 
 # ── TEMPORARY LOGIN (until Zhuolin builds real auth) ─────────────────────────
@@ -734,12 +734,12 @@ def ai_query():
         return redirect(url_for('login'))
     user_id = session['user_id']
     role    = session.get('role', 'visitor')
-
     result  = None
     error   = None
 
     if request.method == 'POST':
-        query_text = request.form.get('query_text', '')
+        query_text = request.form.get('query_text', '').strip()
+        # All security gates (eligibility, rate limit, role filter, taboo) run inside submit_query
         result = submit_query(user_id, role, query_text)
         if result.get('error'):
             error = result['error']
@@ -810,8 +810,8 @@ def ai_recommendations_refresh():
     save_recommendations(session['user_id'], recs)
     return redirect(url_for('ai_recommendations'))
 
-
 # ── RUN THE APP ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
+    init_vector_db()
     app.run(debug=True)

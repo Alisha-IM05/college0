@@ -1,4 +1,4 @@
 flask
 chromadb
-openai
+google-generativeai
 python-dotenv

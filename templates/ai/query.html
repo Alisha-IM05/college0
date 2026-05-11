@@ -127,9 +127,14 @@
         {% endif %}
 
         <form method="POST" action="/ai/query">
-            <textarea name="query_text" rows="4" placeholder="e.g. What computer science courses are available this semester?" required></textarea>
+            <textarea name="query_text" id="queryText" rows="4" placeholder="e.g. What computer science courses are available this semester?" required></textarea>
             <br>
             <button type="submit">Submit Query</button>
+            {% if role == 'student' %}
+            <button type="button" onclick="document.getElementById('queryText').value='What courses do you recommend for me based on my academic history?'; this.form.submit();" style="background:#28a745; margin-left:8px;">
+                Get My Course Recommendations
+            </button>
+            {% endif %}
         </form>
     </div>
 
@@ -144,7 +149,7 @@
         {% if result.query_id %}
         <div class="flag-form">
             <form method="POST" action="/ai/query/{{ result.query_id }}/flag" style="display:inline;">
-                <input type="text" name="reason" placeholder="Flag reason (optional)">
+                <input type="text" name="reason" placeholder="Flag reason (required)" required>
                 <button type="submit" class="flag-btn">Flag this response</button>
             </form>
         </div>
