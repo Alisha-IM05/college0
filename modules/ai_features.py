@@ -112,10 +112,13 @@ def submit_query(user_id, _session_role, query_text):
         # K-013: Full RAG pipeline — ChromaDB (text-embedding-004) → gemini-1.5-flash fallback
         response_text, source = run_rag_pipeline(query_text, effective_role)
 
-    # K-013: Scrub taboo words — filtered text is logged so DB and UI always match
-    response_text = apply_taboo_filter(response_text)
+    # K-013: Scrub taboo words from both sides before logging.
+    # query_text was already used for RAG search above (original needed for accuracy).
+    # logged_query is the sanitized version stored in ai_queries — DB always matches UI.
+    response_text  = apply_taboo_filter(response_text)
+    logged_query   = apply_taboo_filter(query_text)
 
-    query_id = log_query(user_id, query_text, response_text, source, effective_role)
+    query_id = log_query(user_id, logged_query, response_text, source, effective_role)
     return {"response": response_text, "source": source, "query_id": query_id, "error": None}
 
 
@@ -682,6 +685,33 @@ def export_query_log_csv(output_path):
             writer.writeheader()
             writer.writerows([dict(r) for r in rows])
         return len(rows)
+    finally:
+        db.close()
+
+
+def scrub_existing_query_log():
+    # One-time retroactive cleanup — applies apply_taboo_filter to every existing
+    # ai_queries row so historical records match the current filter rules.
+    db = get_db()
+    try:
+        rows = db.execute("SELECT id, query_text, response_text FROM ai_queries").fetchall()
+        updated = 0
+        db.execute("BEGIN")
+        for row in rows:
+            clean_query    = apply_taboo_filter(row["query_text"])
+            clean_response = apply_taboo_filter(row["response_text"] or "")
+            if clean_query != row["query_text"] or clean_response != (row["response_text"] or ""):
+                db.execute(
+                    "UPDATE ai_queries SET query_text = ?, response_text = ? WHERE id = ?",
+                    (clean_query, clean_response, row["id"]),
+                )
+                updated += 1
+        db.commit()
+        print(f"scrub_existing_query_log: {updated}/{len(rows)} rows cleaned.")
+        return updated
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
