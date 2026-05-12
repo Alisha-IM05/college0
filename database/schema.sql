@@ -203,3 +203,16 @@ CREATE TABLE IF NOT EXISTS recommendations (
     FOREIGN KEY (student_id) REFERENCES users(id),
     FOREIGN KEY (course_id) REFERENCES courses(id)
 );
+
+CREATE TABLE IF NOT EXISTS flagged_course_gpas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    class_gpa REAL NOT NULL,
+    justification TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'justified', 'warned', 'terminated')),
+    flagged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES courses(id),
+    FOREIGN KEY (instructor_id) REFERENCES users(id)
+);
