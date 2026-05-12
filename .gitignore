@@ -1,6 +1,8 @@
 .env
-__pycache__/.DS_Store
+__pycache__/
+.DS_Store
 database/college0.db
+<<<<<<< ours
 __pycache__/
 *.pyc
 *.pyo
@@ -8,3 +10,8 @@ database/college0.db
 .env
 node_modules/
 frontend/dist/
+=======
+frontend/node_modules/
+frontend/dist/
+static/dist/
+>>>>>>> theirs
