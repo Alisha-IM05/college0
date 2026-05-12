@@ -4,12 +4,13 @@ from jinja2 import ChoiceLoader, FileSystemLoader
 from database.db import init_db, get_db
 
 from modules.conduct import (
-    submit_review, get_course_reviews,
-    file_complaint, get_pending_complaints, resolve_complaint,
+    submit_review, get_course_reviews, get_course_average_rating,
+    file_student_complaint, file_instructor_complaint,
+    get_pending_complaints, resolve_student_complaint, resolve_instructor_complaint,
     get_taboo_words, add_taboo_word, remove_taboo_word,
-    get_user_warnings, get_warning_count, issue_warning
+    get_user_warnings, get_warning_count, issue_warning,
+    seed_conduct_data, mark_fine_paid
 )
-
 from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
 
 app = Flask(__name__)
@@ -618,25 +619,42 @@ def reject_waitlist_route(course_id):
 def view_reviews(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
+    conn = get_db()
+    course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+    conn.close()
     reviews = get_course_reviews(course_id, session['role'])
+    avg_rating = get_course_average_rating(course_id)
     return render_template('conduct/reviews.html',
                            reviews=reviews,
+                           course=course,
                            course_id=course_id,
-                           role=session['role'])
-
+                           avg_rating=avg_rating,
+                           role=session['role'],
+                           username=session['username'])
+ 
 @app.route('/reviews/submit/<int:course_id>', methods=['POST'])
 def submit_review_route(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
     star_rating = int(request.form['star_rating'])
-    review_text = request.form['review_text']
-    message = submit_review(session['user_id'], course_id, star_rating, review_text)
+    review_text = request.form.get('review_text', '').strip()
+    result = submit_review(session['user_id'], course_id, star_rating, review_text)
+    # result format: "status:message"
+    status, message = result.split(':', 1)
+    conn = get_db()
+    course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+    conn.close()
     reviews = get_course_reviews(course_id, session['role'])
+    avg_rating = get_course_average_rating(course_id)
     return render_template('conduct/reviews.html',
                            reviews=reviews,
+                           course=course,
                            course_id=course_id,
+                           avg_rating=avg_rating,
                            role=session['role'],
-                           message=message)
+                           username=session['username'],
+                           message=message,
+                           message_type=status)
 
 
 # ── WARNINGS ──────────────────────────────────────────────────────────────────
@@ -646,10 +664,11 @@ def view_warnings():
     if 'user_id' not in session:
         return redirect(url_for('home'))
     warnings = get_user_warnings(session['user_id'])
-    count    = get_warning_count(session['user_id'])
+    count = get_warning_count(session['user_id'])
     return render_template('conduct/warnings.html',
                            warnings=warnings,
                            count=count,
+                           role=session['role'],
                            username=session['username'])
 
 
@@ -659,39 +678,143 @@ def view_warnings():
 def view_complaints():
     if 'user_id' not in session:
         return redirect(url_for('home'))
+ 
+    conn = get_db()
+    # load all users for dropdown (so students/instructors can pick by name, not ID)
+    all_users = conn.execute(
+        "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
+    ).fetchall()
+ 
+    if session['role'] == 'instructor':
+        # instructors see their own students for their complaint form
+        my_students = conn.execute(
+            """SELECT DISTINCT u.id, u.username FROM users u
+               JOIN enrollments e ON u.id = e.student_id
+               JOIN courses c ON e.course_id = c.id
+               WHERE c.instructor_id = ? AND e.status = 'enrolled'""",
+            (session['user_id'],)
+        ).fetchall()
+        conn.close()
+        return render_template('conduct/complaints.html',
+                               complaints=[],
+                               role=session['role'],
+                               username=session['username'],
+                               all_users=all_users,
+                               my_students=my_students)
+ 
     if session['role'] == 'registrar':
         complaints = get_pending_complaints()
+        conn.close()
         return render_template('conduct/complaints.html',
                                complaints=complaints,
-                               role='registrar')
-    return render_template('conduct/complaints.html',
-                           complaints=[],
-                           role=session['role'])
-
-@app.route('/complaints/file', methods=['POST'])
-def file_complaint_route():
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
-    filed_against = int(request.form['filed_against'])
-    description   = request.form['description']
-    message = file_complaint(session['user_id'], filed_against, description)
+                               role='registrar',
+                               username=session['username'],
+                               all_users=[])
+ 
+    conn.close()
+    # student view
     return render_template('conduct/complaints.html',
                            complaints=[],
                            role=session['role'],
-                           message=message)
-
-@app.route('/complaints/resolve/<int:complaint_id>', methods=['POST'])
-def resolve_complaint_route(complaint_id):
+                           username=session['username'],
+                           all_users=all_users,
+                           my_students=[])
+ 
+ 
+@app.route('/complaints/file/student', methods=['POST'])
+def file_student_complaint_route():
+    """J-001: student files complaint against anyone"""
+    if 'user_id' not in session or session['role'] not in ('student', 'instructor'):
+        return redirect(url_for('home'))
+    filed_against = int(request.form['filed_against'])
+    description = request.form.get('description', '').strip()
+    result = file_student_complaint(session['user_id'], filed_against, description)
+    status, message = result.split(':', 1)
+ 
+    conn = get_db()
+    all_users = conn.execute(
+        "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
+    ).fetchall()
+    conn.close()
+    return render_template('conduct/complaints.html',
+                           complaints=[],
+                           role=session['role'],
+                           username=session['username'],
+                           all_users=all_users,
+                           my_students=[],
+                           message=message,
+                           message_type=status)
+ 
+ 
+@app.route('/complaints/file/instructor', methods=['POST'])
+def file_instructor_complaint_route():
+    """J-012: instructor files complaint against a student with requested action"""
+    if 'user_id' not in session or session['role'] != 'instructor':
+        return redirect(url_for('home'))
+    student_id = int(request.form['student_id'])
+    description = request.form.get('description', '').strip()
+    requested_action = request.form.get('requested_action', '')
+    result = file_instructor_complaint(session['user_id'], student_id, description, requested_action)
+    status, message = result.split(':', 1)
+ 
+    conn = get_db()
+    my_students = conn.execute(
+        """SELECT DISTINCT u.id, u.username FROM users u
+           JOIN enrollments e ON u.id = e.student_id
+           JOIN courses c ON e.course_id = c.id
+           WHERE c.instructor_id = ? AND e.status = 'enrolled'""",
+        (session['user_id'],)
+    ).fetchall()
+    all_users = conn.execute(
+        "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
+    ).fetchall()
+    conn.close()
+    return render_template('conduct/complaints.html',
+                           complaints=[],
+                           role=session['role'],
+                           username=session['username'],
+                           all_users=all_users,
+                           my_students=my_students,
+                           message=message,
+                           message_type=status)
+ 
+ 
+@app.route('/complaints/resolve/student/<int:complaint_id>', methods=['POST'])
+def resolve_student_complaint_route(complaint_id):
+    """J-008/J-009: registrar resolves a student-filed complaint"""
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
-    warn_user_id    = int(request.form['warn_user_id'])
-    resolution_text = request.form['resolution_text']
-    message = resolve_complaint(complaint_id, warn_user_id, resolution_text)
+    warn_user_id = int(request.form['warn_user_id'])
+    resolution_text = request.form.get('resolution_text', '').strip()
+    result = resolve_student_complaint(complaint_id, warn_user_id, resolution_text)
+    status, message = result.split(':', 1)
     complaints = get_pending_complaints()
     return render_template('conduct/complaints.html',
                            complaints=complaints,
                            role='registrar',
-                           message=message)
+                           username=session['username'],
+                           all_users=[],
+                           message=message,
+                           message_type=status)
+ 
+ 
+@app.route('/complaints/resolve/instructor/<int:complaint_id>', methods=['POST'])
+def resolve_instructor_complaint_route(complaint_id):
+    """J-015: registrar must accept or reject — no silent dismissal"""
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    decision = request.form.get('decision', '')
+    resolution_text = request.form.get('resolution_text', '').strip()
+    result = resolve_instructor_complaint(complaint_id, decision, resolution_text)
+    status, message = result.split(':', 1)
+    complaints = get_pending_complaints()
+    return render_template('conduct/complaints.html',
+                           complaints=complaints,
+                           role='registrar',
+                           username=session['username'],
+                           all_users=[],
+                           message=message,
+                           message_type=status)
 
 
 # ── TABOO WORDS (registrar only) ──────────────────────────────────────────────
@@ -701,23 +824,42 @@ def manage_taboo():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     words = get_taboo_words()
-    return render_template('conduct/taboo.html', words=words)
-
+    return render_template('conduct/taboo.html',
+                           words=words,
+                           role=session['role'],
+                           username=session['username'])
+ 
 @app.route('/taboo/add', methods=['POST'])
 def add_taboo():
-    if session['role'] != 'registrar':
+    if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
-    word = request.form['word']
-    add_taboo_word(word)
-    return redirect(url_for('manage_taboo'))
-
+    word = request.form.get('word', '').strip()
+    success = add_taboo_word(word)
+    words = get_taboo_words()
+    message = None
+    message_type = None
+    if not word:
+        message = "Word cannot be empty."
+        message_type = "error"
+    elif not success:
+        message = f'"{word}" is already in the taboo list.'
+        message_type = "warning"
+    else:
+        message = f'"{word}" added to taboo list.'
+        message_type = "success"
+    return render_template('conduct/taboo.html',
+                           words=words,
+                           role=session['role'],
+                           username=session['username'],
+                           message=message,
+                           message_type=message_type)
+ 
 @app.route('/taboo/remove/<word>')
 def remove_taboo(word):
-    if session['role'] != 'registrar':
+    if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     remove_taboo_word(word)
     return redirect(url_for('manage_taboo'))
-
 
 # ── RUN THE APP ───────────────────────────────────────────────────────────────
 

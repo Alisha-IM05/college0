@@ -154,15 +154,18 @@ CREATE TABLE IF NOT EXISTS warnings (
 
 CREATE TABLE IF NOT EXISTS complaints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filed_by INTEGER NOT NULL,          -- user who filed the complaint
-    filed_against INTEGER NOT NULL,     -- user being complained about
+    filed_by INTEGER NOT NULL,
+    filed_against INTEGER NOT NULL,
     description TEXT NOT NULL,
+    complaint_type TEXT DEFAULT 'student' CHECK(complaint_type IN ('student', 'instructor')),
+    requested_action TEXT CHECK(requested_action IN ('warning', 'deregister', NULL)),
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'resolved')),
-    resolution TEXT,                    -- what the registrar decided
+    resolution TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (filed_by) REFERENCES users(id),
     FOREIGN KEY (filed_against) REFERENCES users(id)
 );
+ 
 
 
 -- ============================================================
