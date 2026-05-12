@@ -39,7 +39,7 @@ def create_test_users():
     test_users = [
         ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
         ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('student1', 'student1@college0.com', 'password123', 'student'),
+        ('zhuolin', 'zhoulinl@college0.com', '12345', 'student'),
         ('student2',   'student2@college0.com',   'password123', 'student'),
     ]
     for username, email, password, role in test_users:
@@ -891,4 +891,4 @@ def remove_taboo(word):
 # ── RUN THE APP ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
