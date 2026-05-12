@@ -1,5 +1,14 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+import json
+import os
+
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from jinja2 import ChoiceLoader, FileSystemLoader
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from database.db import init_db, get_db
 
@@ -12,12 +21,116 @@ from modules.conduct import (
 
 from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
 
+from modules.auth import (
+    submit_application, get_applications_for_clerk_user,
+    list_pending_applications, list_all_applications,
+    approve_application, reject_application,
+    change_password,
+    suspend_user, terminate_user, reactivate_user, list_manageable_users,
+    require_role, verify_clerk_session, establish_clerk_session,
+)
+
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
 ])
 
 app.secret_key = 'college0secretkey'
+
+
+@app.context_processor
+def inject_clerk_config():
+    """Make the Clerk publishable key available to every template so the
+    visitor-facing pages can boot Clerk JS without a backend round-trip."""
+    return {
+        "CLERK_PUBLISHABLE_KEY": os.environ.get("CLERK_PUBLISHABLE_KEY", ""),
+    }
+
+
+# ── React shell helper ───────────────────────────────────────────────────────
+# Auth-related pages are now rendered via a single Jinja shell (_shell.html)
+# that mounts a Vite-built React bundle from static/dist/. Each route passes a
+# `page` discriminator + arbitrary JSON-serialisable data the React component
+# reads from the inline <script id="__data"> tag. Teammates' pages still use
+# their existing Jinja templates unchanged.
+
+_PAGE_TITLES = {
+    'login': 'College0 — Login',
+    'apply': 'College0 — Apply',
+    'apply_status': 'College0 — Application Status',
+    'change_password': 'College0 — Change Password',
+    'dashboard': 'College0 — Dashboard',
+    'registrar_applications': 'College0 — Applications',
+    'registrar_users': 'College0 — Users',
+}
+
+
+def _json_default(obj):
+    """sqlite3.Row -> dict; datetime -> isoformat; everything else -> str."""
+    try:
+        return dict(obj)
+    except (TypeError, ValueError):
+        pass
+    if hasattr(obj, 'isoformat'):
+        return obj.isoformat()
+    return str(obj)
+
+
+def render_react(page, **data):
+    data.setdefault('clerk_publishable_key', os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
+    return render_template(
+        '_shell.html',
+        page=page,
+        page_title=_PAGE_TITLES.get(page, 'College0'),
+        data_json=json.dumps(data, default=_json_default),
+    )
+
+
+def wants_json():
+    """True when the request was made via the React fetch helper (so we
+    should respond with a JSON envelope) rather than a full page load."""
+    if request.headers.get('X-Requested-With') == 'fetch':
+        return True
+    accept = request.headers.get('Accept', '')
+    return 'application/json' in accept and 'text/html' not in accept
+
+
+def _rows_to_dicts(rows):
+    return [dict(r) for r in rows] if rows else []
+
+
+# Routes that a user with must_change_password=1 is still allowed to hit.
+_ALLOWED_DURING_PW_CHANGE = {
+    'change_password_page', 'change_password_submit',
+    'logout', 'static',
+}
+
+
+@app.before_request
+def enforce_password_change():
+    """UC-11: once a user is logged in with a temporary password, every
+    request must redirect to /change-password until they pick a new one.
+    This guards routes that don't use the @require_role decorator."""
+    if 'user_id' not in session:
+        return None
+    if request.endpoint in _ALLOWED_DURING_PW_CHANGE:
+        return None
+    conn = get_db()
+    row = conn.execute(
+        "SELECT must_change_password, status FROM users WHERE id = ?",
+        (session['user_id'],),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        session.clear()
+        return redirect(url_for('home'))
+    if row['status'] != 'active':
+        session.clear()
+        return redirect(url_for('home'))
+    if row['must_change_password']:
+        session['must_change_password'] = True
+        return redirect(url_for('change_password_page'))
+    return None
 
 # initialize the database when the app starts
 with app.app_context():
@@ -61,7 +174,7 @@ create_test_users()
 
 @app.route('/')
 def home():
-    return render_template('login.html')
+    return render_react('login')
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -75,18 +188,272 @@ def login():
     ).fetchone()
     conn.close()
 
-    if user:
-        session['user_id']  = user['id']
-        session['username'] = user['username']
-        session['role']     = user['role']
-        return redirect(url_for('dashboard'))
+    def _login_error(message):
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('login', error=message)
+
+    if not user:
+        return _login_error("Invalid username or password.")
+    if user['status'] == 'suspended':
+        return _login_error("Your account is suspended. Please contact the registrar.")
+    if user['status'] == 'terminated':
+        return _login_error("Your account has been terminated. Please contact the registrar.")
+
+    session['user_id']  = user['id']
+    session['username'] = user['username']
+    session['role']     = user['role']
+
+    if user['must_change_password']:
+        session['must_change_password'] = True
+        target = url_for('change_password_page')
     else:
-        return render_template('login.html', error="Invalid username or password.")
+        session.pop('must_change_password', None)
+        target = url_for('dashboard')
+
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': target})
+    return redirect(target)
+
+@app.route('/auth/clerk-login', methods=['POST'])
+def clerk_login():
+    """Bridge a verified Clerk session into the Flask session. The React
+    login page calls this after the user signs in with the Clerk <SignIn>
+    widget, so the same identity used on /apply can open a normal app
+    session. UC-10/UC-11 still apply: if the user row has
+    must_change_password=1, we redirect to /change-password just like the
+    username/password login does."""
+    result = establish_clerk_session(request)
+    if not result.get('ok'):
+        payload = {'ok': False, 'error': result.get('error', 'Sign-in failed.')}
+        if result.get('redirect'):
+            payload['redirect'] = result['redirect']
+        return jsonify(payload), 200
+
+    user = result['user']
+    session['user_id']  = user['id']
+    session['username'] = user['username']
+    session['role']     = user['role']
+    if result['must_change_password']:
+        session['must_change_password'] = True
+    else:
+        session.pop('must_change_password', None)
+
+    return jsonify({'ok': True, 'redirect': result['redirect']})
+
 
 @app.route('/logout')
 def logout():
+    """Clear the Flask session and bounce back to /. The `?signed_out=1`
+    flag tells the React login page to also sign out of Clerk on arrival —
+    otherwise the lingering Clerk JWT would let the page's ClerkBridge
+    re-establish the Flask session immediately and the user would land
+    right back on /dashboard."""
     session.clear()
-    return redirect(url_for('home'))
+    return redirect(url_for('home') + '?signed_out=1')
+
+
+# ── APPLICATIONS (UC-07 / UC-08 / UC-11) ─────────────────────────────────────
+# Visitors authenticate with Clerk (JS) to submit an application and check
+# its status. The Clerk session is verified server-side via verify_clerk_session.
+
+@app.route('/apply', methods=['GET'])
+def apply_page():
+    return render_react('apply')
+
+
+@app.route('/apply', methods=['POST'])
+def apply_submit():
+    clerk_user_id = verify_clerk_session(request)
+    if not clerk_user_id:
+        msg = "You must sign in with Clerk before submitting an application."
+        if wants_json():
+            return jsonify({'ok': False, 'error': msg}), 200
+        return render_react('apply', error=msg)
+
+    first_name = request.form.get('first_name', '')
+    last_name = request.form.get('last_name', '')
+    email = request.form.get('email', '')
+    role_applied = request.form.get('role_applied', '')
+
+    ok, message = submit_application(
+        first_name, last_name, email, role_applied, clerk_user_id
+    )
+    if not ok:
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('apply', error=message,
+                            first_name=first_name, last_name=last_name,
+                            email=email, role_applied=role_applied)
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': url_for('apply_status')})
+    return redirect(url_for('apply_status'))
+
+
+@app.route('/apply/status')
+def apply_status():
+    clerk_user_id = verify_clerk_session(request)
+    applications = _rows_to_dicts(
+        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
+    )
+    return render_react('apply_status',
+                        applications=applications,
+                        signed_in=bool(clerk_user_id))
+
+
+@app.route('/apply/status.json')
+def apply_status_json():
+    """JSON variant used by the React ApplyStatus page when the initial HTML
+    response wasn't able to verify the Clerk session server-side (e.g. the
+    `__session` cookie wasn't sent on the initial GET)."""
+    clerk_user_id = verify_clerk_session(request)
+    applications = _rows_to_dicts(
+        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
+    )
+    return jsonify({
+        'signed_in': bool(clerk_user_id),
+        'applications': applications,
+    })
+
+
+# ── REGISTRAR: REVIEW APPLICATIONS (UC-09 / UC-10) ───────────────────────────
+
+def _applications_payload(issued=None):
+    pending = _rows_to_dicts(list_pending_applications())
+    reviewed = [dict(a) for a in list_all_applications() if a['status'] != 'pending']
+    return {
+        'pending': pending,
+        'reviewed': reviewed,
+        'issued': issued,
+    }
+
+
+@app.route('/registrar/applications')
+@require_role('registrar')
+def registrar_applications():
+    issued = session.pop('issued_credentials', None)
+    return render_react('registrar_applications',
+                        role=session['role'],
+                        username=session['username'],
+                        **_applications_payload(issued))
+
+
+@app.route('/registrar/applications/<int:application_id>/approve', methods=['POST'])
+@require_role('registrar')
+def registrar_approve_application(application_id):
+    result = approve_application(application_id)
+    if result.get('ok'):
+        issued = {
+            'user_id': result['user_id'],
+            'username': result['username'],
+            'temp_password': result['temp_password'],
+            'role': result['role'],
+            'email': result['email'],
+        }
+    else:
+        issued = {'error': result.get('message', 'Approval failed.')}
+
+    if wants_json():
+        return jsonify({'ok': bool(result.get('ok')),
+                        'data': {'issued': issued, **_applications_payload(issued)}})
+
+    session['issued_credentials'] = issued
+    return redirect(url_for('registrar_applications'))
+
+
+@app.route('/registrar/applications/<int:application_id>/reject', methods=['POST'])
+@require_role('registrar')
+def registrar_reject_application(application_id):
+    ok, message = reject_application(application_id)
+    issued = ({'error': message} if not ok else {'rejected': True, 'message': message})
+
+    if wants_json():
+        return jsonify({'ok': ok,
+                        'data': {'issued': issued, **_applications_payload(issued)}})
+
+    session['issued_credentials'] = issued
+    return redirect(url_for('registrar_applications'))
+
+
+# ── REGISTRAR: MANAGE USERS (UC-13) ──────────────────────────────────────────
+
+@app.route('/registrar/users')
+@require_role('registrar')
+def registrar_users():
+    users = _rows_to_dicts(list_manageable_users())
+    return render_react('registrar_users',
+                        users=users,
+                        message=session.pop('user_action_message', None),
+                        role=session['role'],
+                        username=session['username'])
+
+
+@app.route('/registrar/users/<int:user_id>/<action>', methods=['POST'])
+@require_role('registrar')
+def registrar_user_action(user_id, action):
+    if action == 'suspend':
+        ok, message = suspend_user(user_id)
+    elif action == 'terminate':
+        ok, message = terminate_user(user_id)
+    elif action == 'reactivate':
+        ok, message = reactivate_user(user_id)
+    else:
+        ok, message = False, "Unknown action."
+
+    if wants_json():
+        return jsonify({
+            'ok': ok,
+            'message': message,
+            'data': {'users': _rows_to_dicts(list_manageable_users())},
+        })
+
+    session['user_action_message'] = message
+    return redirect(url_for('registrar_users'))
+
+
+# ── CHANGE PASSWORD (UC-11) ──────────────────────────────────────────────────
+
+@app.route('/change-password', methods=['GET'])
+def change_password_page():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    return render_react('change_password',
+                        must_change=session.get('must_change_password', False),
+                        username=session['username'],
+                        role=session.get('role'))
+
+
+@app.route('/change-password', methods=['POST'])
+def change_password_submit():
+    if 'user_id' not in session:
+        if wants_json():
+            return jsonify({'ok': False, 'error': 'Not signed in.'}), 401
+        return redirect(url_for('home'))
+
+    old_password = request.form.get('old_password', '')
+    new_password = request.form.get('new_password', '')
+    confirm = request.form.get('confirm_password', '')
+
+    def _pw_error(message):
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('change_password',
+                            error=message,
+                            must_change=session.get('must_change_password', False),
+                            username=session['username'],
+                            role=session.get('role'))
+
+    if new_password != confirm:
+        return _pw_error("New password and confirmation do not match.")
+
+    ok, message = change_password(session['user_id'], old_password, new_password)
+    if not ok:
+        return _pw_error(message)
+
+    session.pop('must_change_password', None)
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': url_for('dashboard')})
+    return redirect(url_for('dashboard'))
 
 
 # ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -124,12 +491,12 @@ def dashboard():
             (session['user_id'],)
         ).fetchall()
     conn.close()
-    return render_template('dashboard.html',
-                           username=session['username'],
-                           role=session['role'],
-                           semester=semester,
-                           student_data=student_data,
-                           grades=grades)
+    return render_react('dashboard',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        student_data=dict(student_data) if student_data else None,
+                        grades=_rows_to_dicts(grades))
     
     
 #start of Tanzina's code

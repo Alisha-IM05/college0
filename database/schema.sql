@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('student', 'instructor', 'registrar', 'suspended', 'terminated', 'graduated')),
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'terminated')),
+    must_change_password INTEGER NOT NULL DEFAULT 0,   -- 1 = force password change on next login (UC-11)
+    clerk_user_id TEXT UNIQUE,          -- Clerk identity; copied from applications.clerk_user_id on approve
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS applications (
     email TEXT NOT NULL,
     role_applied TEXT NOT NULL CHECK(role_applied IN ('student', 'instructor')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+    clerk_user_id TEXT,                 -- links the Clerk identity that submitted this application (UC-07/08)
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP
 );
