@@ -8,3 +8,4 @@ database/college0.db
 .env
 node_modules/
 frontend/dist/
+database/college0.db
