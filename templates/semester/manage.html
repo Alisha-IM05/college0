@@ -1,29 +1,62 @@
 {% extends "base.html" %}
+{% block title %}Semester Management — College0{% endblock %}
+
 {% block content %}
-<h2>Semester Management</h2>
+<h1 class="page-title">Semester Management</h1>
 
 {% if message %}
-  <p><strong>{{ message }}</strong></p>
+<div class="alert alert-success">{{ message }}</div>
 {% endif %}
 
 {% if semester %}
-  <p><strong>Current Semester:</strong> {{ semester['name'] }}</p>
-  <p><strong>Current Period:</strong> {{ semester['current_period'] | upper }}
+{% set periods = ['setup', 'registration', 'special_registration', 'running', 'grading'] %}
+{% set labels = {'setup':'Setup','registration':'Registration','special_registration':'Special Reg.','running':'Running','grading':'Grading'} %}
+
+<div class="card mb-2">
+  <h2 style="margin-bottom:.5rem;">{{ semester['name'] }}</h2>
+  <p class="text-muted text-sm mb-2">
+    Current Period: <strong>{{ semester['current_period'] | upper }}</strong>
     {% if semester['current_period'] == 'special_registration' %}
       — Special registration is open for students with cancelled courses.
     {% endif %}
   </p>
 
-  <form method="POST" action="/semester/advance">
-    <input type="hidden" name="semester_id" value="{{ semester['id'] }}">
-    <button type="submit">Advance to Next Period</button>
-  </form>
-  <br>
-  <form method="POST" action="/semester/retreat">
-    <input type="hidden" name="semester_id" value="{{ semester['id'] }}">
-    <button type="submit">← Go Back One Period</button>
-  </form>
+  <div class="period-bar">
+    {% for p in periods %}
+      {% set is_active = p == semester['current_period'] %}
+      {% set is_past = periods.index(p) < periods.index(semester['current_period']) %}
+      <div class="period-bar-segment {{ 'active' if is_active else 'past' if is_past else '' }}"></div>
+    {% endfor %}
+  </div>
+
+  <div class="period-steps mb-3">
+    {% for p in periods %}
+      {% set is_active = p == semester['current_period'] %}
+      {% set is_past = periods.index(p) < periods.index(semester['current_period']) %}
+      <div class="period-step {{ 'active' if is_active else 'past' if is_past else '' }}">
+        {% if is_past %}✓ {% endif %}{{ labels[p] }}
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="flex gap-2 flex-wrap">
+    <form method="POST" action="/semester/advance">
+      <input type="hidden" name="semester_id" value="{{ semester['id'] }}" />
+      <button type="submit" class="btn btn-primary">Advance to Next Period →</button>
+    </form>
+    <form method="POST" action="/semester/retreat">
+      <input type="hidden" name="semester_id" value="{{ semester['id'] }}" />
+      <button type="submit" class="btn btn-secondary">← Go Back One Period</button>
+    </form>
+  </div>
+</div>
+
 {% else %}
-  <p>No semester found.</p>
+<div class="card">
+  <div class="empty-state">
+    <div class="icon">📅</div>
+    No semester found.
+  </div>
+</div>
 {% endif %}
 {% endblock %}

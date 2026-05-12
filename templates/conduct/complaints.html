@@ -1,106 +1,61 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>College0 - Complaints</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
-        .navbar {
-            background-color: #2E4A7A;
-            padding: 15px 30px;
-            color: white;
-            display: flex;
-            justify-content: space-between;
-        }
-        .navbar h1 { margin: 0; font-size: 22px; }
-        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
-        .container { padding: 40px; }
-        .box {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            margin-bottom: 25px;
-        }
-        h2 { color: #2E4A7A; }
-        .complaint-card {
-            border-left: 4px solid #e67e22;
-            padding: 15px;
-            margin-bottom: 15px;
-            background: #fffaf5;
-            border-radius: 5px;
-        }
-        input, textarea {
-            width: 100%;
-            padding: 10px;
-            margin: 8px 0;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            box-sizing: border-box;
-            font-size: 14px;
-        }
-        button {
-            padding: 10px 25px;
-            background-color: #2E4A7A;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover { background-color: #1a3357; }
-        .message { padding: 10px; border-radius: 5px; margin-bottom: 15px; background: #d4edda; color: #155724; }
-    </style>
-</head>
-<body>
-    <div class="navbar">
-        <h1>College0 - Complaints</h1>
-        <div>
-            <a href="/dashboard">Dashboard</a>
-            <a href="/logout">Logout</a>
-        </div>
+{% extends "base.html" %}
+{% block title %}Complaints — College0{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Complaints</h1>
+
+{% if message %}
+<div class="alert alert-success">{{ message }}</div>
+{% endif %}
+
+{% if role != 'registrar' %}
+<div class="card mb-2">
+  <h2 style="margin-bottom:1rem;">File a Complaint</h2>
+  <form method="POST" action="/complaints/file">
+    <div class="form-group">
+      <label>User ID of person you are complaining about</label>
+      <input type="number" name="filed_against" placeholder="Enter user ID" required />
     </div>
-
-    <div class="container">
-        {% if message %}
-            <div class="message">{{ message }}</div>
-        {% endif %}
-
-        <!-- Students and instructors file complaints -->
-        {% if role != 'registrar' %}
-        <div class="box">
-            <h2>File a Complaint</h2>
-            <form method="POST" action="/complaints/file">
-                <label>User ID of person you are complaining about:</label>
-                <input type="number" name="filed_against" placeholder="Enter user ID" required />
-                <label>Description:</label>
-                <textarea name="description" rows="4" placeholder="Describe the issue..."></textarea>
-                <button type="submit">Submit Complaint</button>
-            </form>
-        </div>
-        {% endif %}
-
-        <!-- Registrar sees and resolves complaints -->
-        {% if role == 'registrar' %}
-        <div class="box">
-            <h2>Pending Complaints</h2>
-            {% if complaints %}
-                {% for complaint in complaints %}
-                <div class="complaint-card">
-                    <p><strong>Filed by:</strong> {{ complaint['filed_by_name'] }}</p>
-                    <p><strong>Against:</strong> {{ complaint['filed_against_name'] }}</p>
-                    <p><strong>Description:</strong> {{ complaint['description'] }}</p>
-                    <p><strong>Filed on:</strong> {{ complaint['created_at'] }}</p>
-                    <form method="POST" action="/complaints/resolve/{{ complaint['id'] }}">
-                        <input type="number" name="warn_user_id" placeholder="User ID to warn" required />
-                        <input type="text" name="resolution_text" placeholder="Resolution notes" required />
-                        <button type="submit">Resolve & Issue Warning</button>
-                    </form>
-                </div>
-                {% endfor %}
-            {% else %}
-                <p>No pending complaints.</p>
-            {% endif %}
-        </div>
-        {% endif %}
+    <div class="form-group">
+      <label>Description</label>
+      <textarea name="description" rows="4" placeholder="Describe the issue..."></textarea>
     </div>
-</body>
-</html>
+    <button type="submit" class="btn btn-primary">Submit Complaint</button>
+  </form>
+</div>
+{% endif %}
+
+{% if role == 'registrar' %}
+<div class="card">
+  <h2 style="margin-bottom:1rem;">Pending Complaints</h2>
+  {% if complaints %}
+    {% for complaint in complaints %}
+    <div style="border-left:4px solid var(--warn);padding:1rem 1.25rem;margin-bottom:1rem;background:#fffaf5;border-radius:6px;">
+      <p class="mb-1"><strong>Filed by:</strong> {{ complaint['filed_by_name'] }}</p>
+      <p class="mb-1"><strong>Against:</strong> {{ complaint['filed_against_name'] }}</p>
+      <p class="mb-1"><strong>Description:</strong> {{ complaint['description'] }}</p>
+      <p class="text-muted text-sm mb-2">Filed on: {{ complaint['created_at'] }}</p>
+      <form method="POST" action="/complaints/resolve/{{ complaint['id'] }}">
+        <div class="grid-2" style="gap:.75rem;margin-bottom:.75rem;">
+          <div class="form-group" style="margin:0;">
+            <label>User ID to warn</label>
+            <input type="number" name="warn_user_id" placeholder="User ID" required />
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>Resolution notes</label>
+            <input type="text" name="resolution_text" placeholder="Resolution notes" required />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Resolve &amp; Issue Warning</button>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty-state">
+      <div class="icon">📭</div>
+      No pending complaints.
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
