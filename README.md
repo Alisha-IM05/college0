@@ -24,13 +24,13 @@ pip install flask
 
 ### Step 3 — Set up the database
 ```bash
-python database/db.py
+python3 database/db.py
 ```
 This creates the SQLite database file with all the tables.
 
 ### Step 4 — Run the website
 ```bash
-python app.py
+python3 app.py
 ```
 Then open your browser and go to:
 ```
