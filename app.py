@@ -1,11 +1,10 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, after_this_request
 from jinja2 import ChoiceLoader, FileSystemLoader
 from modules.ai_features import (
     submit_query, get_query_history,
     flag_query, get_all_flags, resolve_flag,
     generate_recommendations, save_recommendations, get_recommendations,
-    init_vector_db,
-    check_user_ai_eligibility, check_rate_limit,filter_query_by_role
+    init_vector_db, refresh_vector_db, export_query_log_csv,
 )
 from database.db import init_db, get_db
 
@@ -792,6 +791,30 @@ def ai_resolve_flag(flag_id):
     return redirect(url_for('ai_flags'))
 
 
+@app.route('/ai/export')
+def ai_export_queries():
+    # K-025: Registrar-only download of the full ai_queries log as CSV
+    if 'user_id' not in session or session.get('role') != 'registrar':
+        return redirect(url_for('home'))
+    import tempfile, os
+    from datetime import datetime as _dt
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.csv', prefix='ai_queries_')
+    os.close(tmp_fd)
+
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        return response
+
+    export_query_log_csv(tmp_path)
+    filename = f"ai_queries_{_dt.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return send_file(tmp_path, mimetype='text/csv', as_attachment=True, download_name=filename)
+
+
 @app.route('/ai/recommendations')
 def ai_recommendations():
     if 'user_id' not in session or session.get('role') != 'student':
@@ -806,6 +829,8 @@ def ai_recommendations():
 def ai_recommendations_refresh():
     if 'user_id' not in session or session.get('role') != 'student':
         return redirect(url_for('home'))
+    # K-024: Re-sync ChromaDB with latest course catalog before scoring
+    refresh_vector_db()
     recs = generate_recommendations(session['user_id'])
     save_recommendations(session['user_id'], recs)
     return redirect(url_for('ai_recommendations'))

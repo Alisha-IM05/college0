@@ -109,8 +109,10 @@ def submit_query(user_id, _session_role, query_text):
         else:
             response_text, source = run_rag_pipeline(query_text, effective_role)
     else:
-        # K-013: Full RAG pipeline — ChromaDB (text-embedding-004) → gemini-1.5-flash fallback
-        response_text, source = run_rag_pipeline(query_text, effective_role)
+        # Privacy: fetch the caller's own private data locally and inject it as
+        # trusted context — it bypasses the vector DB so cross-user leakage is impossible.
+        private_ctx = _fetch_private_context(user_id, effective_role, query_text)
+        response_text, source = run_rag_pipeline(query_text, effective_role, private_context=private_ctx)
 
     # K-013: Scrub taboo words from both sides before logging.
     # query_text was already used for RAG search above (original needed for accuracy).
@@ -127,6 +129,71 @@ def _is_recommendation_query(query_text):
     q = query_text.lower()
     keywords = ["recommend", "suggestion", "what course should", "which course", "should i take"]
     return any(kw in q for kw in keywords)
+
+
+_PRIVATE_DATA_KEYWORDS = [
+    "my gpa", "my grade", "my grades", "my course", "my courses",
+    "my schedule", "my enrollment", "my record", "my transcript",
+    "how am i doing", "what did i get",
+]
+
+
+def _fetch_private_context(user_id, role, query_text):
+    # Privacy enforcement: fetch the logged-in student's own data from DB and return it
+    # as trusted context strings. This data is injected directly into the LLM prompt —
+    # it NEVER enters ChromaDB, so it is invisible to other users' similarity searches.
+    # Registrars get aggregate access; students are strictly scoped to their own user_id.
+    if role not in ("student", "registrar"):
+        return []
+    q = query_text.lower()
+    if role == "student" and not any(kw in q for kw in _PRIVATE_DATA_KEYWORDS):
+        return []
+
+    db = get_db()
+    try:
+        if role == "student":
+            grades = db.execute(
+                """SELECT c.course_name, g.letter_grade, g.numeric_value
+                   FROM grades g JOIN courses c ON g.course_id = c.id
+                   WHERE g.student_id = ?""",
+                (user_id,),
+            ).fetchall()
+            enrollments = db.execute(
+                """SELECT c.course_name, c.time_slot, e.status
+                   FROM enrollments e JOIN courses c ON e.course_id = c.id
+                   WHERE e.student_id = ? AND e.status = 'enrolled'""",
+                (user_id,),
+            ).fetchall()
+            lines = []
+            if grades:
+                avg_gpa = sum(g["numeric_value"] for g in grades) / len(grades)
+                grade_str = ", ".join(
+                    f"{g['course_name']}: {g['letter_grade']}" for g in grades
+                )
+                lines.append(
+                    f"This student's grades (their own data only): {grade_str}. "
+                    f"GPA: {avg_gpa:.2f}/4.0."
+                )
+            if enrollments:
+                enroll_str = ", ".join(
+                    f"{e['course_name']} ({e['time_slot']})" for e in enrollments
+                )
+                lines.append(f"This student's current enrollments: {enroll_str}.")
+            return lines
+
+        # Registrar: aggregate stats only — no individual student names/IDs exposed
+        if role == "registrar":
+            count = db.execute("SELECT COUNT(*) FROM ai_queries").fetchone()[0]
+            flags = db.execute(
+                "SELECT COUNT(*) FROM ai_flags WHERE status = 'pending'"
+            ).fetchone()[0]
+            return [
+                f"AI query log: {count} total queries recorded.",
+                f"Open flags awaiting review: {flags}.",
+            ]
+    finally:
+        db.close()
+    return []
 
 
 def get_query_history(user_id, limit=20):
@@ -448,17 +515,13 @@ def query_vector_db(query_text, _role, n_results=3):
         return []
 
 
-def query_llm(query_text, context, role):
-    # K-012: gemini-2.5-flash with grounded context from ChromaDB
-    print(f"DEBUG: Context sent to LLM ({len(context)} docs): {context}")
-
-    # Empty context → polite "not found" instead of hallucinating
-    if not context:
-        return (
-            "I couldn't find specific information about that in the College0 course catalog. "
-            "Please check the course portal or contact the registrar's office directly.",
-            "llm",
-        )
+def query_llm(query_text, context, role, private_context=None):
+    # K-012: gemini-2.5-flash — always called, even when ChromaDB returns nothing.
+    # private_context: list of strings fetched locally from DB (grades, enrollments).
+    # These are injected as trusted facts and never pass through ChromaDB, preventing
+    # one student from retrieving another student's data via similarity search.
+    all_context = list(context) + (private_context or [])
+    print(f"DEBUG: Context sent to LLM ({len(all_context)} docs): {all_context}")
 
     try:
         import google.generativeai as genai
@@ -467,16 +530,31 @@ def query_llm(query_text, context, role):
 
         role_ctx       = get_role_context(role)
         allowed_topics = ", ".join(role_ctx["topics"])
-        context_block  = "\n".join(f"- {c}" for c in context)
 
-        prompt = "\n".join([
-            "You are the College0 Academic Assistant.",
-            f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
-            "You MUST use the course catalog context below to answer.",
-            "If the context contains schedule or seat availability, always state it explicitly.",
-            f"\nCourse catalog context:\n{context_block}",
-            f"\nUser question: {query_text}",
-        ])
+        if all_context:
+            context_block = "\n".join(f"- {c}" for c in all_context)
+            prompt = "\n".join([
+                "You are the College0 Academic Assistant.",
+                f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
+                "Use the verified context below to answer. Do not invent course names, "
+                "grades, or seat counts not present in the context.",
+                "If the context contains schedule or seat availability, state it explicitly.",
+                f"\nContext:\n{context_block}",
+                f"\nUser question: {query_text}",
+            ])
+        else:
+            # K-011: No catalog match — answer from general academic knowledge but
+            # explicitly forbid the LLM from inventing institution-specific facts.
+            prompt = "\n".join([
+                "You are the College0 Academic Assistant.",
+                f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
+                "No specific course catalog data was found for this query.",
+                "Answer from general academic knowledge only. Do NOT invent course names, "
+                "grades, enrollment numbers, or policies specific to College0.",
+                "If you cannot answer without institution-specific data, say so clearly "
+                "and suggest the user contact the registrar's office.",
+                f"\nUser question: {query_text}",
+            ])
 
         model    = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
@@ -497,12 +575,12 @@ def attach_hallucination_warning(response_text, source):
     return response_text
 
 
-def run_rag_pipeline(query_text, role):
-    # K-013: Full RAG pipeline — retrieve then always generate via LLM.
-    # Passing context (even an empty list) lets the LLM synthesise a proper answer
-    # rather than returning raw catalog chunks or saying "I don't know the schedule."
+def run_rag_pipeline(query_text, role, private_context=None):
+    # K-013: Full RAG pipeline — ChromaDB retrieval then Gemini generation.
+    # private_context is pre-fetched personal data (grades/enrollments) injected
+    # directly into the prompt — never stored in or retrieved from the vector DB.
     vector_results = query_vector_db(query_text, role)
-    response_text, _ = query_llm(query_text, vector_results, role)
+    response_text, _ = query_llm(query_text, vector_results, role, private_context=private_context)
     source = "vector_db" if vector_results else "llm"
     response_text = attach_hallucination_warning(response_text, source)
     return response_text, source
