@@ -77,7 +77,7 @@ def submit_query(user_id, _session_role, query_text):
     # K-007: Hard-block suspended / terminated / graduated accounts
     if fresh_role in ("suspended", "terminated", "graduated"):
         return {
-            "error": f"AI access is not available for {fresh_role} accounts.",
+            "error": f"Access Denied: Your account status '{fresh_role}' does not permit AI queries.",
             "response": None, "source": None, "query_id": None,
         }
 
@@ -121,7 +121,13 @@ def submit_query(user_id, _session_role, query_text):
     logged_query   = apply_taboo_filter(query_text)
 
     query_id = log_query(user_id, logged_query, response_text, source, effective_role)
-    return {"response": response_text, "source": source, "query_id": query_id, "error": None}
+    return {
+        "response": response_text,
+        "source":   source,
+        "query_id": query_id,
+        "error":    None,
+        "debug":    _last_query_debug.copy(),  # distance scores for metadata panel
+    }
 
 
 def _is_recommendation_query(query_text):
@@ -131,68 +137,239 @@ def _is_recommendation_query(query_text):
     return any(kw in q for kw in keywords)
 
 
+# Keywords that trigger personal-data fetch for students
 _PRIVATE_DATA_KEYWORDS = [
     "my gpa", "my grade", "my grades", "my course", "my courses",
     "my schedule", "my enrollment", "my record", "my transcript",
     "how am i doing", "what did i get",
 ]
 
+# Keywords that trigger academic-data fetch for registrars
+_REGISTRAR_DATA_KEYWORDS = [
+    "gpa", "grade", "grades", "student", "academic standing",
+    "transcript", "enrollment", "enrolled", "performance", "standing",
+]
+
+# Keywords that trigger the full student roster (registrar "floodlight" queries)
+_REGISTRAR_LIST_KEYWORDS = [
+    "list", "all students", "active students", "who is active",
+    "who are active", "show all", "show me all", "full roster", "roster",
+    "everyone", "every student",
+]
+
+
+def _extract_student_target(query_text, db=None):
+    """Parse a registrar query for a specific student reference.
+
+    Priority order:
+    1. Numeric ID: "user_id 3", "student id 3", "user 7"
+    2. Regex name patterns: "student alice", "alice's gpa", "about charlie", etc.
+    3. DB scan fallback: any known student username appearing as a whole word in the query
+
+    Returns (target_id: int|None, target_name: str|None).
+    Both None means no specific student mentioned → use aggregate stats.
+    """
+    # 1. Numeric ID patterns
+    id_match = re.search(
+        r'\b(?:user_id|student[\s_]id|user)\s*[:#=]?\s*(\d+)',
+        query_text, re.IGNORECASE,
+    )
+    if id_match:
+        return int(id_match.group(1)), None
+
+    # 2. Explicit name patterns (possessive expanded to more academic keywords)
+    name_match = re.search(
+        r"\bstudent\s+(?:named\s+)?([a-zA-Z]\w*)"
+        r"|([a-zA-Z]\w*)'s\s+(?:gpa|grade|grades|record|transcript|standing|enrollment|status|info|academic)",
+        query_text, re.IGNORECASE,
+    )
+    if name_match:
+        return None, (name_match.group(1) or name_match.group(2))
+
+    # 3. DB scan fallback: match any enrolled student's username as a whole word.
+    # Handles bare-name queries like "Tell me about Charlie" or "What about Bob?".
+    if db is not None:
+        q_lower = query_text.lower()
+        students = db.execute(
+            "SELECT username FROM users WHERE role = 'student'"
+        ).fetchall()
+        for s in students:
+            name = s["username"].lower()
+            if len(name) >= 3 and re.search(r'\b' + re.escape(name) + r'\b', q_lower):
+                return None, s["username"]
+
+    return None, None
+
+
+def _fetch_student_grades(db, student_id):
+    """Shared helper: fetch grades and enrollments for one student."""
+    grades = db.execute(
+        """SELECT c.course_name, g.letter_grade, g.numeric_value
+           FROM grades g JOIN courses c ON g.course_id = c.id
+           WHERE g.student_id = ?""",
+        (student_id,),
+    ).fetchall()
+    enrollments = db.execute(
+        """SELECT c.course_name, c.time_slot
+           FROM enrollments e JOIN courses c ON e.course_id = c.id
+           WHERE e.student_id = ? AND e.status = 'enrolled'""",
+        (student_id,),
+    ).fetchall()
+    return grades, enrollments
+
+
+def _format_grades_lines(grades, enrollments, label="This student"):
+    lines = []
+    if grades:
+        avg_gpa = sum(g["numeric_value"] for g in grades) / len(grades)
+        grade_str = ", ".join(f"{g['course_name']}: {g['letter_grade']}" for g in grades)
+        lines.append(f"{label}'s grades: {grade_str}. GPA: {avg_gpa:.2f}/4.0.")
+    if enrollments:
+        enroll_str = ", ".join(f"{e['course_name']} ({e['time_slot']})" for e in enrollments)
+        lines.append(f"{label}'s current enrollments: {enroll_str}.")
+    return lines
+
 
 def _fetch_private_context(user_id, role, query_text):
-    # Privacy enforcement: fetch the logged-in student's own data from DB and return it
-    # as trusted context strings. This data is injected directly into the LLM prompt —
-    # it NEVER enters ChromaDB, so it is invisible to other users' similarity searches.
-    # Registrars get aggregate access; students are strictly scoped to their own user_id.
-    if role not in ("student", "registrar"):
-        return []
-    q = query_text.lower()
-    if role == "student" and not any(kw in q for kw in _PRIVATE_DATA_KEYWORDS):
+    """Return a list of trusted fact strings to inject into the LLM prompt.
+
+    Student scope  — strictly scoped to session user_id (cross-student leak impossible).
+    Registrar scope — can look up any student by name/ID, or get aggregate stats.
+    Data injected here bypasses ChromaDB entirely, so it is never retrievable by
+    another user's similarity search.
+    """
+    if role not in ("student", "registrar", "instructor"):
         return []
 
-    db = get_db()
-    try:
-        if role == "student":
-            grades = db.execute(
-                """SELECT c.course_name, g.letter_grade, g.numeric_value
-                   FROM grades g JOIN courses c ON g.course_id = c.id
-                   WHERE g.student_id = ?""",
-                (user_id,),
-            ).fetchall()
-            enrollments = db.execute(
-                """SELECT c.course_name, c.time_slot, e.status
-                   FROM enrollments e JOIN courses c ON e.course_id = c.id
-                   WHERE e.student_id = ? AND e.status = 'enrolled'""",
-                (user_id,),
-            ).fetchall()
+    q = query_text.lower()
+
+    # ── Student: own data only ────────────────────────────────────────────────
+    if role == "student":
+        if not any(kw in q for kw in _PRIVATE_DATA_KEYWORDS):
+            return []
+        db = get_db()
+        try:
+            student_rec = db.execute(
+                "SELECT cumulative_gpa, status FROM students WHERE id = ?", (user_id,)
+            ).fetchone()
+            grades, enrollments = _fetch_student_grades(db, user_id)
             lines = []
+            if student_rec is not None:
+                gpa_val = student_rec["cumulative_gpa"]
+                lines.append(f"Your cumulative GPA: {round(gpa_val, 2)}/4.0.")
             if grades:
-                avg_gpa = sum(g["numeric_value"] for g in grades) / len(grades)
                 grade_str = ", ".join(
                     f"{g['course_name']}: {g['letter_grade']}" for g in grades
                 )
-                lines.append(
-                    f"This student's grades (their own data only): {grade_str}. "
-                    f"GPA: {avg_gpa:.2f}/4.0."
-                )
+                lines.append(f"Your completed course grades: {grade_str}.")
             if enrollments:
                 enroll_str = ", ".join(
                     f"{e['course_name']} ({e['time_slot']})" for e in enrollments
                 )
-                lines.append(f"This student's current enrollments: {enroll_str}.")
+                lines.append(f"Your current enrollments: {enroll_str}.")
+            else:
+                lines.append("No active enrollments found for the current semester.")
             return lines
+        finally:
+            db.close()
 
-        # Registrar: aggregate stats only — no individual student names/IDs exposed
-        if role == "registrar":
-            count = db.execute("SELECT COUNT(*) FROM ai_queries").fetchone()[0]
-            flags = db.execute(
+    # ── Instructor: assigned courses and their enrolled students (K-006) ──────
+    if role == "instructor":
+        db = get_db()
+        try:
+            courses = db.execute(
+                """SELECT id, course_name, time_slot, enrolled_count
+                   FROM courses WHERE instructor_id = ? AND status = 'active'""",
+                (user_id,),
+            ).fetchall()
+            if not courses:
+                return ["You have no active courses assigned this semester."]
+            lines = []
+            for c in courses:
+                students = db.execute(
+                    """SELECT u.username FROM enrollments e
+                       JOIN users u ON e.student_id = u.id
+                       WHERE e.course_id = ? AND e.status = 'enrolled'""",
+                    (c["id"],),
+                ).fetchall()
+                names = (
+                    ", ".join(s["username"] for s in students)
+                    if students else "no enrolled students yet"
+                )
+                lines.append(
+                    f"Course '{c['course_name']}' ({c['time_slot']}): "
+                    f"{c['enrolled_count']} enrolled. Students: {names}."
+                )
+            return lines
+        finally:
+            db.close()
+
+    # ── Registrar: floodgate — always inject the full system snapshot ──────────
+    # No keyword or name detection needed. Every registrar query gets the complete
+    # student database pre-loaded into context so the LLM never has to "search."
+    if role == "registrar":
+        db = get_db()
+        try:
+            students = db.execute(
+                """SELECT u.id, u.username,
+                          s.cumulative_gpa, s.status AS academic_standing
+                   FROM users u
+                   LEFT JOIN students s ON u.id = s.id
+                   WHERE u.role = 'student'
+                   ORDER BY u.username"""
+            ).fetchall()
+
+            total_queries = db.execute(
+                "SELECT COUNT(*) FROM ai_queries"
+            ).fetchone()[0]
+            open_flags = db.execute(
                 "SELECT COUNT(*) FROM ai_flags WHERE status = 'pending'"
             ).fetchone()[0]
-            return [
-                f"AI query log: {count} total queries recorded.",
-                f"Open flags awaiting review: {flags}.",
-            ]
-    finally:
-        db.close()
+
+            lines = [f"=== FULL STUDENT DATABASE ({len(students)} students) ==="]
+            for s in students:
+                sid      = s["id"]
+                gpa      = s["cumulative_gpa"]
+                # str(round()) avoids trailing zeros (3.90 → 3.9) that tempt rounding
+                gpa_str  = str(round(gpa, 2)) if gpa is not None else "N/A"
+                standing = s["academic_standing"] or "unknown"
+
+                grades = db.execute(
+                    """SELECT c.course_name, g.letter_grade
+                       FROM grades g JOIN courses c ON g.course_id = c.id
+                       WHERE g.student_id = ?""",
+                    (sid,),
+                ).fetchall()
+                enrollments = db.execute(
+                    """SELECT c.course_name, c.time_slot
+                       FROM enrollments e JOIN courses c ON e.course_id = c.id
+                       WHERE e.student_id = ? AND e.status = 'enrolled'""",
+                    (sid,),
+                ).fetchall()
+
+                grade_str  = (
+                    ", ".join(f"{g['course_name']}: {g['letter_grade']}" for g in grades)
+                    if grades else "no grade records"
+                )
+                enroll_str = (
+                    ", ".join(f"{e['course_name']} ({e['time_slot']})" for e in enrollments)
+                    if enrollments else "No active enrollments this semester"
+                )
+
+                lines.append(
+                    f"Student: {s['username']} (ID {sid}) | "
+                    f"GPA: {gpa_str}/4.0 | Standing: {standing} | "
+                    f"Grades: {grade_str} | Enrollments: {enroll_str}"
+                )
+
+            lines.append(
+                f"=== SYSTEM STATS: {len(students)} students | "
+                f"{total_queries} total AI queries | {open_flags} open flags ==="
+            )
+            return lines
+        finally:
+            db.close()
+
     return []
 
 
@@ -220,10 +397,37 @@ def get_query_history(user_id, limit=20):
 _KNOWN_DB_ROLES = {"student", "instructor", "registrar", "suspended", "terminated", "graduated"}
 
 ROLE_CONTEXTS = {
-    "visitor":    {"topics": ["courses", "programs", "campus info"],                       "can_see_grades": False, "can_see_enrollment": False},
-    "student":    {"topics": ["courses", "grades", "enrollment", "recommendations"],       "can_see_grades": True,  "can_see_enrollment": True},
-    "instructor": {"topics": ["courses", "grades", "students", "schedules"],               "can_see_grades": True,  "can_see_enrollment": True},
-    "registrar":  {"topics": ["all"],                                                       "can_see_grades": True,  "can_see_enrollment": True},
+    # Visitor — public-only: course descriptions, available seats, general info
+    "visitor": {
+        "topics": ["public course descriptions", "available seats", "general college information"],
+        "can_see_grades": False, "can_see_enrollment": False,
+    },
+    # Student — personal scope only: their own GPA/grades, enrolled courses, general academic topics
+    "student": {
+        "topics": [
+            "their own GPA and grades", "their enrolled courses",
+            "available courses this semester", "general academic concepts",
+            "course recommendations based on their history",
+        ],
+        "can_see_grades": True, "can_see_enrollment": True,
+    },
+    # Instructor — academic access: course details, student lists for their classes, grading policies
+    "instructor": {
+        "topics": [
+            "course details and schedules", "student lists for their assigned courses",
+            "grading policies", "general academic concepts",
+        ],
+        "can_see_grades": True, "can_see_enrollment": True,
+    },
+    # Registrar — full administrative access: any student GPA, all course logs, system exports
+    # Matches planning doc: "automatic GPA > 3.0 check" + "full-access dashboard"
+    "registrar": {
+        "topics": [
+            "any student's GPA and academic standing", "all course enrollment logs",
+            "system-wide statistics", "AI query exports", "approval and graduation workflows",
+        ],
+        "can_see_grades": True, "can_see_enrollment": True,
+    },
 }
 
 
@@ -310,7 +514,7 @@ def check_user_ai_eligibility(user_id):
         if not user:
             return False, "User not found."
         if user["role"] in ("suspended", "terminated", "graduated"):
-            return False, f"AI access is not available for {user['role']} accounts."
+            return False, f"Access Denied: Your account status '{user['role']}' does not permit AI queries."
         return True, ""
     finally:
         db.close()
@@ -378,6 +582,10 @@ def resolve_flag(flag_id, _resolver_user_id):
 _chroma_collection = None
 _chroma_ef = None   # stored globally so query_vector_db uses embed_query() task type
 
+# Populated by query_vector_db on every call — read by submit_query for the metadata panel.
+# NOT thread-safe under multi-worker deployments; fine for single-threaded dev server.
+_last_query_debug = {"raw_distances": [], "docs_returned": 0, "docs_passed_threshold": 0}
+
 # ChromaDB persist dir — resolved from DB_PATH at the top of this file
 _CHROMA_PERSIST_DIR = DB_PATH
 
@@ -435,10 +643,8 @@ def init_vector_db():
             embedding_function=ef,
             metadata={"hnsw:space": "cosine"},
         )
-        print(f"Vector DB loaded: {_chroma_collection.count()} docs in collection.")
         return True
     except Exception as e:
-        print(f"Vector DB Init Error: {e}")
         _chroma_collection = None
         _chroma_ef = None
         return False
@@ -475,14 +681,15 @@ def seed_vector_db():
         db.close()
 
 
-def is_relevant_result(distance, max_distance=0.9):
-    # K-023: cosine distance < 0.9 — emergency-wide threshold to confirm data is reachable
+def is_relevant_result(distance, max_distance=0.7):
+    # K-010: cosine distance threshold — only return high-confidence local answers
     return distance < max_distance
 
 
 def query_vector_db(query_text, _role, n_results=3):
+    global _last_query_debug
     if _chroma_collection is None:
-        print("DEBUG: ChromaDB collection is None — init_vector_db() may have failed.")
+        _last_query_debug = {"raw_distances": [], "docs_returned": 0, "docs_passed_threshold": 0}
         return []
     try:
         # Use embed_query() (retrieval_query task type) for better similarity scores.
@@ -498,20 +705,18 @@ def query_vector_db(query_text, _role, n_results=3):
                 query_texts=[query_text],
                 n_results=n_results,
             )
-        print(f"DEBUG: Raw Distances found: {results['distances']}")
-        docs = results.get("documents", [[]])[0]
-        distances = results.get("distances", [[]])[0]
-        print(f"DEBUG: ChromaDB raw distances for query '{query_text[:60]}': {distances}")
-        relevant_docs = []
-        for doc, dist in zip(docs, distances):
-            if is_relevant_result(dist):
-                relevant_docs.append(doc)
-            else:
-                print(f"DEBUG: Filtered out (dist={dist:.4f} > 0.6): {doc[:60]}...")
-        print(f"DEBUG: {len(relevant_docs)}/{len(docs)} docs passed threshold.")
+        docs      = results.get("documents", [[]])[0]
+        distances = results.get("distances",  [[]])[0]
+        relevant_docs = [
+            doc for doc, dist in zip(docs, distances) if is_relevant_result(dist)
+        ]
+        _last_query_debug = {
+            "raw_distances":       [round(d, 4) for d in distances],
+            "docs_returned":       len(docs),
+            "docs_passed_threshold": len(relevant_docs),
+        }
         return relevant_docs
-    except Exception as e:
-        print(f"ChromaDB Query Error: {e}")
+    except Exception:
         return []
 
 
@@ -521,7 +726,6 @@ def query_llm(query_text, context, role, private_context=None):
     # These are injected as trusted facts and never pass through ChromaDB, preventing
     # one student from retrieving another student's data via similarity search.
     all_context = list(context) + (private_context or [])
-    print(f"DEBUG: Context sent to LLM ({len(all_context)} docs): {all_context}")
 
     try:
         import google.generativeai as genai
@@ -533,9 +737,25 @@ def query_llm(query_text, context, role, private_context=None):
 
         if all_context:
             context_block = "\n".join(f"- {c}" for c in all_context)
+            if role == "registrar":
+                accuracy_line = (
+                    "ROLE: You are the Registrar's Executive Assistant. "
+                    "The full student database has been pre-loaded into the context below. "
+                    "Use it to answer any question about specific students, lists of students, "
+                    "or system-wide statistics with 100% numerical accuracy. "
+                    "CRITICAL: Never round GPA values — if the database shows 3.9, "
+                    "you must report exactly 3.9, never 4.0."
+                )
+            else:
+                accuracy_line = (
+                    "PRECISION REQUIREMENT: Report all numerical values (GPA, grades, scores) "
+                    "exactly as given in the context — never round or alter them. "
+                    "If context states GPA is 3.9, report exactly 3.9."
+                )
             prompt = "\n".join([
                 "You are the College0 Academic Assistant.",
                 f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
+                accuracy_line,
                 "Use the verified context below to answer. Do not invent course names, "
                 "grades, or seat counts not present in the context.",
                 "If the context contains schedule or seat availability, state it explicitly.",
@@ -543,24 +763,42 @@ def query_llm(query_text, context, role, private_context=None):
                 f"\nUser question: {query_text}",
             ])
         else:
-            # K-011: No catalog match — answer from general academic knowledge but
-            # explicitly forbid the LLM from inventing institution-specific facts.
+            # K-011: No catalog match — intent recognition determines behavior.
+            # The LLM is the judge: it must tell a "General Concept" query (e.g.
+            # "what is recursion?", "explain GPA calculation") from a "Local Fact"
+            # query (e.g. "when is CS101?", "what is my GPA?").
+            # General concepts → answer fully from training data.
+            # Local facts with no data → defer to registrar office.
             prompt = "\n".join([
                 "You are the College0 Academic Assistant.",
                 f"The user's role is '{role}'. You may discuss: {allowed_topics}.",
-                "No specific course catalog data was found for this query.",
-                "Answer from general academic knowledge only. Do NOT invent course names, "
-                "grades, enrollment numbers, or policies specific to College0.",
-                "If you cannot answer without institution-specific data, say so clearly "
-                "and suggest the user contact the registrar's office.",
+                "",
+                "The local course catalog returned no specific results for this query.",
+                "Apply the following intent classification to decide how to respond:",
+                "",
+                "GENERAL CONCEPT (answer fully from training knowledge):",
+                "  - Programming topics: recursion, data structures, algorithms, OOP, etc.",
+                "  - Math or science concepts: calculus, statistics, etc.",
+                "  - Study strategies, academic integrity, how GPAs work in general.",
+                "  - General grading scales, academic policies at a high level.",
+                "",
+                "LOCAL FACT (no data found — defer to registrar):",
+                "  - Specific course schedules or office hours at College0.",
+                "  - A specific student's grade, GPA, or enrollment status.",
+                "  - Exact seat availability or waitlist position.",
+                "",
+                "Rules:",
+                "  - NEVER invent College0-specific data (course names, student names, grades).",
+                "  - If it is a general concept, explain it clearly and helpfully.",
+                "  - If it is a local fact you cannot find, say so and suggest "
+                "contacting the registrar's office.",
                 f"\nUser question: {query_text}",
             ])
 
         model    = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         return response.text.strip(), "llm"
-    except Exception as e:
-        print(f"LLM Error: {e}")
+    except Exception:
         return "AI service is temporarily unavailable. Please try again later.", "llm"
 
 
@@ -637,6 +875,12 @@ def get_flags_for_query(query_id):
 
 # ── BLOCK 5: Recommender & Final Testing ─────────────────────────────────────
 
+def _is_intro_course(course_name):
+    """True if course name suggests introductory level — used for probation-tier roadmapping."""
+    n = course_name.lower()
+    return any(kw in n for kw in ["intro", "introduction", "101", "100", "fundamentals", "basic"])
+
+
 def score_courses_for_student(student_id, available_courses):
     # K-019: Returns sorted list of (course_dict, score, reason)
     db = get_db()
@@ -665,6 +909,12 @@ def score_courses_for_student(student_id, available_courses):
         for course in available_courses:
             if course["id"] in enrolled_ids or course["id"] in completed_ids:
                 continue
+            # Skip cancelled courses and full courses (belt-and-suspenders — generate_recommendations
+            # already filters by status='active', but scenario toggles can change state mid-session)
+            if course.get("status") == "cancelled":
+                continue
+            if course.get("enrolled_count", 0) >= course.get("capacity", 30):
+                continue
             score = 50
             if avg_gpa >= 3.5:
                 score  += 20
@@ -672,9 +922,23 @@ def score_courses_for_student(student_id, available_courses):
             elif avg_gpa >= 2.5:
                 score  += 10
                 reason  = "Good standing (GPA ≥ 2.5) — course matches your level"
-            else:
+            elif avg_gpa >= 2.0:
                 score  += 5
-                reason  = "Course available — consider strengthening your GPA first"
+                reason  = "Course available — consider strengthening foundational skills this semester"
+            else:
+                # Academic probation tier (avg_gpa < 2.0): prioritise introductory courses
+                if _is_intro_course(course["course_name"]):
+                    score  += 25
+                    reason  = (
+                        "Academic probation standing — this introductory course is strongly "
+                        "recommended to rebuild your GPA. Visit the tutoring center for support."
+                    )
+                else:
+                    score  += 0
+                    reason  = (
+                        "Academic probation standing — this advanced course may be difficult at "
+                        "your current GPA. Introductory courses and tutoring are recommended first."
+                    )
             if course.get("enrolled_count", 0) < course.get("capacity", 30):
                 score += 5
             scored.append((dict(course), score, reason))
@@ -785,7 +1049,6 @@ def scrub_existing_query_log():
                 )
                 updated += 1
         db.commit()
-        print(f"scrub_existing_query_log: {updated}/{len(rows)} rows cleaned.")
         return updated
     except Exception:
         db.rollback()
@@ -856,3 +1119,151 @@ def test_query_throughput(n=10):
         submit_query(uid, "student", f"Test query number {i}")
         times.append((time.time() - t0) * 1000)
     return round(sum(times) / len(times), 2)
+
+
+# ── Modular Routing ───────────────────────────────────────────────────────────
+
+def register_ai_routes(app):
+    """Plug-and-play: call once with any Flask app to mount all /ai/* routes.
+
+    Importing Flask utilities locally keeps this module usable without Flask
+    (e.g. in unit tests or the seeder). All AI business-logic functions called
+    from inside the route closures are resolved from this module's own global
+    scope — no imports needed inside the closures.
+    """
+    from flask import (
+        render_template, request, redirect, url_for,
+        session, send_file, after_this_request,
+    )
+    import tempfile
+    import os as _os
+    from datetime import datetime as _dt
+
+    # ── Query & History ───────────────────────────────────────────────────────
+
+    @app.route('/ai/query', methods=['GET', 'POST'])
+    def ai_query():
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        user_id    = session['user_id']
+        role       = session.get('role', 'visitor')
+        result     = None
+        error      = None
+        query_text = ''
+
+        if request.method == 'POST':
+            query_text = request.form.get('query_text', '').strip()
+            result = submit_query(user_id, role, query_text)
+            if result.get('error'):
+                error  = result['error']
+                result = None
+
+        history = get_query_history(user_id, limit=10)
+
+        # Build role-specific sidebar data injected into the unified template
+        sidebar = {}
+        if role == 'student':
+            sidebar['recommendations'] = generate_recommendations(user_id)
+        elif role == 'registrar':
+            sidebar['flags'] = get_all_flags(status_filter='pending')
+        elif role == 'instructor':
+            _db = get_db()
+            try:
+                courses = _db.execute(
+                    """SELECT id, course_name, time_slot, enrolled_count, capacity
+                       FROM courses WHERE instructor_id = ? AND status = 'active'""",
+                    (user_id,),
+                ).fetchall()
+                course_list = []
+                for c in courses:
+                    students = _db.execute(
+                        """SELECT u.username FROM enrollments e
+                           JOIN users u ON e.student_id = u.id
+                           WHERE e.course_id = ? AND e.status = 'enrolled'""",
+                        (c['id'],),
+                    ).fetchall()
+                    course_list.append({
+                        'course_name':    c['course_name'],
+                        'time_slot':      c['time_slot'],
+                        'enrolled_count': c['enrolled_count'],
+                        'capacity':       c['capacity'],
+                        'students':       [s['username'] for s in students],
+                    })
+                sidebar['courses'] = course_list
+            finally:
+                _db.close()
+
+        return render_template(
+            'ai/query.html',
+            role=role, result=result, error=error,
+            history=history, sidebar=sidebar, query_text=query_text,
+        )
+
+    @app.route('/ai/history')
+    def ai_history():
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        return redirect(url_for('ai_query'))
+
+    # ── Flagging ──────────────────────────────────────────────────────────────
+
+    @app.route('/ai/query/<int:query_id>/flag', methods=['POST'])
+    def ai_flag_query(query_id):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        reason = request.form.get('reason', '').strip()
+        if reason:
+            flag_query(query_id, session['user_id'], reason)
+        return redirect(url_for('ai_query'))
+
+    @app.route('/ai/flags')
+    def ai_flags():
+        if 'user_id' not in session or session.get('role') != 'registrar':
+            return redirect(url_for('home'))
+        return redirect(url_for('ai_query'))
+
+    @app.route('/ai/flags/<int:flag_id>/resolve', methods=['POST'])
+    def ai_resolve_flag(flag_id):
+        if 'user_id' not in session or session.get('role') != 'registrar':
+            return redirect(url_for('home'))
+        resolve_flag(flag_id, session['user_id'])
+        return redirect(url_for('ai_query'))
+
+    # ── K-025: Registrar CSV Export ───────────────────────────────────────────
+
+    @app.route('/ai/export')
+    def ai_export_queries():
+        if 'user_id' not in session or session.get('role') != 'registrar':
+            return redirect(url_for('home'))
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix='.csv', prefix='ai_queries_')
+        _os.close(tmp_fd)
+
+        @after_this_request
+        def _cleanup(response):
+            try:
+                _os.unlink(tmp_path)
+            except Exception:
+                pass
+            return response
+
+        export_query_log_csv(tmp_path)
+        filename = f"ai_queries_{_dt.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        return send_file(tmp_path, mimetype='text/csv',
+                         as_attachment=True, download_name=filename)
+
+    # ── Recommendations ───────────────────────────────────────────────────────
+
+    @app.route('/ai/recommendations')
+    def ai_recommendations():
+        if 'user_id' not in session or session.get('role') != 'student':
+            return redirect(url_for('home'))
+        return redirect(url_for('ai_query'))
+
+    @app.route('/ai/recommendations/refresh', methods=['POST'])
+    def ai_recommendations_refresh():
+        if 'user_id' not in session or session.get('role') != 'student':
+            return redirect(url_for('home'))
+        refresh_vector_db()
+        recs = generate_recommendations(session['user_id'])
+        save_recommendations(session['user_id'], recs)
+        return redirect(url_for('ai_query'))

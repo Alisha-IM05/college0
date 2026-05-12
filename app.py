@@ -1,11 +1,6 @@
-from flask import Flask, render_template, request, redirect, url_for, session, send_file, after_this_request
+from flask import Flask, render_template, request, redirect, url_for, session
 from jinja2 import ChoiceLoader, FileSystemLoader
-from modules.ai_features import (
-    submit_query, get_query_history,
-    flag_query, get_all_flags, resolve_flag,
-    generate_recommendations, save_recommendations, get_recommendations,
-    init_vector_db, refresh_vector_db, export_query_log_csv,
-)
+from modules.ai_features import init_vector_db, register_ai_routes
 from database.db import init_db, get_db
 
 from modules.conduct import (
@@ -28,6 +23,8 @@ app.secret_key = 'college0secretkey'
 with app.app_context():
     init_db()
     init_vector_db()   # loads ChromaDB — fails gracefully if GOOGLE_API_KEY is missing
+
+register_ai_routes(app)   # Subsystem 5 — mounts all /ai/* routes from modules/ai_features.py
 
 
 # ── TEMPORARY LOGIN (until Zhuolin builds real auth) ─────────────────────────
@@ -724,116 +721,6 @@ def remove_taboo(word):
     remove_taboo_word(word)
     return redirect(url_for('manage_taboo'))
 
-
-# ── AI FEATURES (Subsystem 5 — Almasur) ──────────────────────────────────────
-
-@app.route('/ai/query', methods=['GET', 'POST'])
-def ai_query():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    user_id = session['user_id']
-    role    = session.get('role', 'visitor')
-    result  = None
-    error   = None
-
-    if request.method == 'POST':
-        query_text = request.form.get('query_text', '').strip()
-        # All security gates (eligibility, rate limit, role filter, taboo) run inside submit_query
-        result = submit_query(user_id, role, query_text)
-        if result.get('error'):
-            error = result['error']
-            result = None
-
-    history = get_query_history(user_id, limit=10)
-    return render_template('ai/query.html',
-                           role=role,
-                           result=result,
-                           error=error,
-                           history=history)
-
-
-@app.route('/ai/history')
-def ai_history():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    history = get_query_history(session['user_id'], limit=20)
-    return render_template('ai/query.html',
-                           role=session.get('role', 'visitor'),
-                           result=None,
-                           error=None,
-                           history=history)
-
-
-@app.route('/ai/query/<int:query_id>/flag', methods=['POST'])
-def ai_flag_query(query_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    reason = request.form.get('reason', '').strip()
-    if reason:
-        flag_query(query_id, session['user_id'], reason)
-    return redirect(url_for('ai_query'))
-
-
-@app.route('/ai/flags')
-def ai_flags():
-    if 'user_id' not in session or session.get('role') != 'registrar':
-        return redirect(url_for('home'))
-    status_filter = request.args.get('status')
-    flags = get_all_flags(status_filter=status_filter)
-    return render_template('ai/flags.html', flags=flags, role='registrar', status_filter=status_filter)
-
-
-@app.route('/ai/flags/<int:flag_id>/resolve', methods=['POST'])
-def ai_resolve_flag(flag_id):
-    if 'user_id' not in session or session.get('role') != 'registrar':
-        return redirect(url_for('home'))
-    resolve_flag(flag_id, session['user_id'])
-    return redirect(url_for('ai_flags'))
-
-
-@app.route('/ai/export')
-def ai_export_queries():
-    # K-025: Registrar-only download of the full ai_queries log as CSV
-    if 'user_id' not in session or session.get('role') != 'registrar':
-        return redirect(url_for('home'))
-    import tempfile, os
-    from datetime import datetime as _dt
-
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.csv', prefix='ai_queries_')
-    os.close(tmp_fd)
-
-    @after_this_request
-    def _cleanup(response):
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        return response
-
-    export_query_log_csv(tmp_path)
-    filename = f"ai_queries_{_dt.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return send_file(tmp_path, mimetype='text/csv', as_attachment=True, download_name=filename)
-
-
-@app.route('/ai/recommendations')
-def ai_recommendations():
-    if 'user_id' not in session or session.get('role') != 'student':
-        return redirect(url_for('home'))
-    recs = get_recommendations(session['user_id'])
-    return render_template('ai/recommendations.html',
-                           role='student',
-                           recommendations=recs)
-
-
-@app.route('/ai/recommendations/refresh', methods=['POST'])
-def ai_recommendations_refresh():
-    if 'user_id' not in session or session.get('role') != 'student':
-        return redirect(url_for('home'))
-    # K-024: Re-sync ChromaDB with latest course catalog before scoring
-    refresh_vector_db()
-    recs = generate_recommendations(session['user_id'])
-    save_recommendations(session['user_id'], recs)
-    return redirect(url_for('ai_recommendations'))
 
 # ── RUN THE APP ───────────────────────────────────────────────────────────────
 

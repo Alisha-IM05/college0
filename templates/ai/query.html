@@ -1,186 +1,468 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>College0 - AI Assistant</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
-        .navbar {
-            background-color: #2E4A7A;
-            padding: 15px 30px;
-            color: white;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .navbar h1 { margin: 0; font-size: 22px; }
-        .navbar a { color: white; text-decoration: none; margin-left: 20px; font-size: 14px; }
-        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
-        .box {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            margin-bottom: 25px;
-        }
-        h2 { color: #2E4A7A; margin-top: 0; }
-        h3 { color: #2E4A7A; }
-        textarea {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 14px;
-            resize: vertical;
-            box-sizing: border-box;
-        }
-        button, .btn {
-            background: #2E4A7A;
-            color: white;
-            border: none;
-            padding: 10px 22px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            text-decoration: none;
-            display: inline-block;
-            margin-top: 8px;
-        }
-        button:hover, .btn:hover { background: #1d3057; }
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 16px;
-        }
-        .response-box {
-            background: #e8f4fd;
-            border-left: 4px solid #2E4A7A;
-            padding: 16px;
-            border-radius: 0 6px 6px 0;
-            white-space: pre-wrap;
-            font-size: 14px;
-        }
-        .source-badge {
-            display: inline-block;
-            padding: 3px 10px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .source-vector_db { background: #d4edda; color: #155724; }
-        .source-llm { background: #fff3cd; color: #856404; }
-        .history-item {
-            border-bottom: 1px solid #eee;
-            padding: 12px 0;
-        }
-        .history-item:last-child { border-bottom: none; }
-        .history-q { font-weight: bold; color: #333; font-size: 14px; }
-        .history-a { color: #555; font-size: 13px; margin-top: 4px; white-space: pre-wrap; }
-        .history-meta { color: #999; font-size: 11px; margin-top: 4px; }
-        .flag-form { margin-top: 8px; }
-        .flag-form input[type=text] {
-            padding: 5px 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 12px;
-            width: 260px;
-        }
-        .flag-btn {
-            background: #dc3545;
-            color: white;
-            border: none;
-            padding: 5px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-left: 6px;
-        }
-        .flag-btn:hover { background: #a71d2a; }
-    </style>
+<meta charset="UTF-8">
+<title>College0 — AI Assistant</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial, sans-serif; background: #f0f4f8; color: #222; }
+
+/* ── Navbar ── */
+.navbar {
+  background: #2E4A7A; color: white; padding: 0 28px;
+  height: 54px; display: flex; align-items: center;
+  justify-content: space-between; position: sticky; top: 0; z-index: 100;
+}
+.navbar h1 { font-size: 17px; font-weight: bold; }
+.navbar a { color: #c8d8f0; text-decoration: none; font-size: 13px; margin-left: 18px; }
+.navbar a:hover { color: white; }
+.role-pill {
+  display: inline-block; background: rgba(255,255,255,0.18);
+  border-radius: 12px; padding: 2px 10px; font-size: 12px;
+  margin-left: 10px; text-transform: capitalize;
+}
+
+/* ── Visitor banner ── */
+.visitor-banner {
+  background: #fff3cd; border-bottom: 1px solid #ffc107;
+  color: #856404; padding: 9px 28px; font-size: 13px;
+  display: flex; align-items: center; gap: 14px;
+}
+.visitor-banner a {
+  background: #2E4A7A; color: white; padding: 4px 14px;
+  border-radius: 4px; text-decoration: none; font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ── Layout ── */
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 20px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 24px;
+}
+
+/* ── Cards ── */
+.box {
+  background: white; border-radius: 10px;
+  border: 1px solid #e0e8f0; padding: 20px 22px; margin-bottom: 18px;
+}
+.box h2 { color: #2E4A7A; font-size: 16px; margin-bottom: 14px; }
+.box h3 { color: #2E4A7A; font-size: 15px; margin-bottom: 12px; }
+
+/* ── Form ── */
+textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid #ccc;
+  border-radius: 6px; font-size: 14px; resize: vertical; min-height: 88px;
+}
+.char-counter { text-align: right; font-size: 11px; color: #aaa; margin-top: 4px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.btn {
+  background: #2E4A7A; color: white; border: none; padding: 9px 18px;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+  text-decoration: none; display: inline-block;
+}
+.btn:hover { background: #1d3057; }
+.btn-green  { background: #28a745; }
+.btn-green:hover  { background: #1e7e34; }
+.btn-teal   { background: #17a2b8; }
+.btn-teal:hover   { background: #117a8b; }
+.btn-muted  { background: #6c757d; }
+.btn-muted:hover  { background: #545b62; }
+.btn-danger { background: #dc3545; }
+.btn-danger:hover { background: #a71d2a; }
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ── Alert ── */
+.alert-error {
+  background: #f8d7da; color: #721c24; padding: 12px 16px;
+  border-radius: 6px; margin-bottom: 14px; font-size: 14px;
+}
+
+/* ── Response ── */
+.source-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 12px;
+  font-size: 12px; font-weight: bold; margin-bottom: 10px;
+}
+.source-vector_db { background: #d4edda; color: #155724; }
+.source-llm       { background: #fff3cd; color: #856404; }
+
+.response-box {
+  background: #e8f4fd; border-left: 4px solid #2E4A7A;
+  padding: 16px; border-radius: 0 6px 6px 0;
+  white-space: pre-wrap; font-size: 14px; line-height: 1.55;
+  margin-bottom: 12px;
+}
+
+.meta-panel {
+  background: #f7fafd; border: 1px solid #e0e8f0;
+  border-radius: 8px; padding: 12px 14px; font-size: 12px; margin-top: 10px;
+}
+.meta-row {
+  display: flex; justify-content: space-between; padding: 4px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-key { color: #888; }
+.meta-val { color: #222; font-weight: bold; text-align: right; }
+.dist-chip {
+  display: inline-block; padding: 1px 7px; margin: 1px 2px 0 0;
+  border-radius: 10px; font-size: 11px;
+}
+.dist-good { background: #d4edda; color: #155724; }
+.dist-ok   { background: #fff3cd; color: #856404; }
+.dist-weak { background: #f8d7da; color: #721c24; }
+
+/* ── Flag form ── */
+.flag-row { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.flag-row input[type=text] {
+  padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
+  font-size: 12px; flex: 1; min-width: 150px;
+}
+
+/* ── History ── */
+.history-card {
+  border: 1px solid #e0e8f0; border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 10px; background: #fafcfe;
+}
+.history-q { font-weight: bold; color: #333; font-size: 13px; }
+.history-a {
+  color: #555; font-size: 12px; margin-top: 4px;
+  white-space: pre-wrap; max-height: 52px; overflow: hidden;
+}
+.history-meta { color: #aaa; font-size: 11px; margin-top: 4px; }
+
+/* ── Sidebar ── */
+.badge-count {
+  display: inline-block; background: #dc3545; color: white;
+  border-radius: 10px; padding: 1px 7px; font-size: 11px; margin-left: 6px;
+}
+.badge-ok {
+  display: inline-block; background: #28a745; color: white;
+  border-radius: 10px; padding: 1px 7px; font-size: 11px; margin-left: 6px;
+}
+
+/* Recommendation cards */
+.rec-card {
+  border: 1px solid #e0e8f0; border-radius: 8px;
+  padding: 11px 13px; margin-bottom: 9px; background: #f7fafd;
+}
+.rec-title { font-weight: bold; color: #2E4A7A; font-size: 13px; }
+.rec-reason { font-size: 12px; color: #555; margin-top: 3px; }
+.rec-meta { font-size: 11px; color: #999; margin-top: 3px; }
+
+/* Flag cards (sidebar) */
+.flag-card {
+  border: 1px solid #f8d7da; border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 8px; background: #fff8f8;
+}
+.flag-query { font-size: 12px; color: #333; font-weight: bold; }
+.flag-reason { font-size: 11px; color: #721c24; margin-top: 3px; }
+.flag-meta { font-size: 10px; color: #aaa; margin-top: 3px; }
+
+/* Course cards (instructor) */
+.course-card {
+  border: 1px solid #e0e8f0; border-radius: 8px;
+  padding: 11px 13px; margin-bottom: 9px; background: #f7fafd;
+}
+.course-name { font-weight: bold; color: #2E4A7A; font-size: 13px; }
+.course-meta { font-size: 11px; color: #555; margin-top: 3px; }
+.student-pills { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+.student-pill {
+  background: #dceeff; color: #2E4A7A; border-radius: 10px;
+  padding: 2px 8px; font-size: 11px;
+}
+
+/* Visitor info */
+.visitor-info ul { padding-left: 18px; margin: 10px 0 14px; }
+.visitor-info li { font-size: 13px; color: #555; margin-bottom: 5px; }
+
+.divider { border: none; border-top: 1px solid #e0e8f0; margin: 14px 0; }
+.empty-msg { color: #888; font-style: italic; font-size: 13px; padding: 4px 0; }
+
+@media (max-width: 800px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar-col { order: -1; }
+}
+</style>
 </head>
 <body>
 
 <div class="navbar">
-    <h1>College0 — AI Assistant</h1>
-    <div>
-        <a href="/dashboard">Dashboard</a>
-        {% if role == 'student' %}
-        <a href="/ai/recommendations">My Recommendations</a>
-        {% endif %}
-        {% if role == 'registrar' %}
-        <a href="/ai/flags">Flag Review</a>
-        {% endif %}
-        <a href="/logout">Logout</a>
-    </div>
+  <h1>College0 — AI Assistant</h1>
+  <div>
+    <a href="/dashboard">Dashboard</a>
+    <span class="role-pill">{{ role }}</span>
+    <a href="/logout" style="margin-left:20px;">Logout</a>
+  </div>
 </div>
 
-<div class="container">
+{% if role == 'visitor' %}
+<div class="visitor-banner">
+  You are browsing as a guest. Sign in to access personal grades, GPA, and recommendations.
+  <a href="/login">Sign In</a>
+</div>
+{% endif %}
+
+<div class="layout">
+
+  <!-- ── Chat column ── -->
+  <div class="chat-col">
 
     <div class="box">
-        <h2>Ask the AI Assistant</h2>
-        <p style="color:#555; font-size:14px;">Ask about courses, schedules, enrollment, or academic policies.</p>
+      <h2>Ask the AI Assistant</h2>
 
-        {% if error %}
-        <div class="alert-error">{{ error }}</div>
-        {% endif %}
+      {% if error %}
+      <div class="alert-error">{{ error }}</div>
+      {% endif %}
 
-        <form method="POST" action="/ai/query">
-            <textarea name="query_text" id="queryText" rows="4" placeholder="e.g. What computer science courses are available this semester?" required></textarea>
-            <br>
-            <button type="submit">Submit Query</button>
-            {% if role == 'student' %}
-            <button type="button" onclick="document.getElementById('queryText').value='What courses do you recommend for me based on my academic history?'; this.form.submit();" style="background:#28a745; margin-left:8px;">
-                Get My Course Recommendations
-            </button>
-            {% endif %}
-        </form>
+      <form method="POST" action="/ai/query">
+        <textarea name="query_text" id="queryText" maxlength="2000"
+          placeholder="{% if role == 'visitor' %}Ask about available courses, schedules, or general academic topics...{% elif role == 'student' %}Ask about your GPA, courses, or type a question to get recommendations...{% elif role == 'registrar' %}Ask about any student, enrollment status, or request system-wide statistics...{% else %}Ask about your courses, schedules, or enrolled students...{% endif %}"
+        >{{ query_text or '' }}</textarea>
+        <div class="char-counter"><span id="charCount">{{ (query_text or '')|length }}</span>/2000</div>
+
+        <div class="btn-row">
+          <button class="btn" type="submit">Submit Query</button>
+
+          {% if role == 'student' %}
+          <button class="btn btn-green" type="button"
+            onclick="fill('What courses do you recommend for me based on my academic history?')">
+            Get Recommendations
+          </button>
+          <button class="btn btn-muted" type="button"
+            onclick="fill('What is my current GPA and which courses am I enrolled in?')">
+            My Academic Summary
+          </button>
+          {% endif %}
+
+          {% if role == 'registrar' %}
+          <button class="btn btn-teal" type="button"
+            onclick="fill('Give me a full summary of all students and their academic standing.')">
+            All Students Summary
+          </button>
+          <a href="/ai/export" class="btn btn-muted">Download Query CSV</a>
+          {% endif %}
+
+          {% if role == 'instructor' %}
+          <button class="btn btn-muted" type="button"
+            onclick="fill('What is the enrollment status of my courses this semester?')">
+            My Course Status
+          </button>
+          {% endif %}
+        </div>
+      </form>
     </div>
 
     {% if result %}
     <div class="box">
-        <h3>Response</h3>
-        <span class="source-badge source-{{ result.source }}">
-            {% if result.source == 'vector_db' %}From Course Catalog{% else %}AI Generated{% endif %}
-        </span>
-        <div class="response-box">{{ result.response }}</div>
+      <h3>Response</h3>
+      <span class="source-badge source-{{ result.source }}">
+        {% if result.source == 'vector_db' %}From Course Catalog{% else %}AI Generated{% endif %}
+      </span>
+      <div class="response-box">{{ result.response }}</div>
 
-        {% if result.query_id %}
-        <div class="flag-form">
-            <form method="POST" action="/ai/query/{{ result.query_id }}/flag" style="display:inline;">
-                <input type="text" name="reason" placeholder="Flag reason (required)" required>
-                <button type="submit" class="flag-btn">Flag this response</button>
-            </form>
+      {% if result.debug %}
+      <div class="meta-panel">
+        <div class="meta-row">
+          <span class="meta-key">Query ID</span>
+          <span class="meta-val">{{ result.query_id }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Source</span>
+          <span class="meta-val">{{ result.source }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Docs matched</span>
+          <span class="meta-val">
+            {{ result.debug.docs_passed_threshold }}/{{ result.debug.docs_returned }}
+          </span>
+        </div>
+        {% if result.debug.raw_distances %}
+        <div class="meta-row">
+          <span class="meta-key">Distances</span>
+          <span class="meta-val">
+            {% for d in result.debug.raw_distances %}
+            <span class="dist-chip
+              {% if d < 0.5 %}dist-good{% elif d < 0.7 %}dist-ok{% else %}dist-weak{% endif %}">
+              {{ d }}
+            </span>
+            {% endfor %}
+          </span>
         </div>
         {% endif %}
+      </div>
+      {% endif %}
+
+      {% if result.query_id %}
+      <div class="flag-row">
+        <form method="POST" action="/ai/query/{{ result.query_id }}/flag"
+              style="display:flex; gap:6px; width:100%;">
+          <input type="text" name="reason" placeholder="Flag reason (required)" required>
+          <button type="submit" class="btn btn-danger btn-sm">Flag</button>
+        </form>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 
     {% if history %}
     <div class="box">
-        <h3>Recent Query History</h3>
-        {% for item in history %}
-        <div class="history-item">
-            <div class="history-q">Q: {{ item.query_text }}</div>
-            <div class="history-a">A: {{ item.response_text }}</div>
-            <div class="history-meta">
-                {{ item.created_at }} &nbsp;|&nbsp;
-                <span class="source-badge source-{{ item.source }}" style="font-size:10px; padding:2px 7px;">
-                    {{ item.source }}
-                </span>
-            </div>
-            <div class="flag-form">
-                <form method="POST" action="/ai/query/{{ item.id }}/flag" style="display:inline;">
-                    <input type="text" name="reason" placeholder="Flag reason">
-                    <button type="submit" class="flag-btn">Flag</button>
-                </form>
-            </div>
+      <h3>Recent Query History</h3>
+      {% for item in history %}
+      <div class="history-card">
+        <div class="history-q">Q: {{ item.query_text }}</div>
+        <div class="history-a">A: {{ item.response_text }}</div>
+        <div class="history-meta">
+          {{ item.created_at }} &nbsp;|&nbsp;
+          <span class="source-badge source-{{ item.source }}"
+                style="font-size:10px; padding:2px 7px;">{{ item.source }}</span>
         </div>
-        {% endfor %}
+        <div class="flag-row" style="margin-top:6px;">
+          <form method="POST" action="/ai/query/{{ item.id }}/flag"
+                style="display:flex; gap:6px;">
+            <input type="text" name="reason" placeholder="Flag reason">
+            <button type="submit" class="btn btn-danger btn-sm">Flag</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
     </div>
     {% endif %}
 
+  </div>
+
+  <!-- ── Sidebar column ── -->
+  <div class="sidebar-col">
+
+    {% if role == 'student' %}
+    <!-- K-016: Course recommendations -->
+    <div class="box">
+      <h3>
+        Recommended for You
+        {% if sidebar.recommendations %}
+        <span class="badge-ok">{{ sidebar.recommendations|length }}</span>
+        {% endif %}
+      </h3>
+      <form method="POST" action="/ai/recommendations/refresh" style="margin-bottom:12px;">
+        <button class="btn btn-sm" type="submit">Refresh</button>
+      </form>
+      {% if sidebar.recommendations %}
+        {% for rec in sidebar.recommendations %}
+        <div class="rec-card">
+          <div class="rec-title">{{ rec.course.course_name }}</div>
+          <div class="rec-reason">{{ rec.reason }}</div>
+          <div class="rec-meta">{{ rec.course.time_slot or 'Schedule TBD' }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="empty-msg">No recommendations yet. Click Refresh to generate.</p>
+      {% endif %}
+    </div>
+
+    {% elif role == 'registrar' %}
+    <!-- K-020: Pending flag review + K-025: Export -->
+    <div class="box">
+      <h3>
+        Pending Flags
+        {% if sidebar.flags %}
+        <span class="badge-count">{{ sidebar.flags|length }}</span>
+        {% else %}
+        <span class="badge-ok">0</span>
+        {% endif %}
+      </h3>
+      <a href="/ai/export" class="btn btn-sm btn-muted"
+         style="margin-bottom:12px; display:inline-block;">
+        Download Query CSV
+      </a>
+      <hr class="divider">
+      {% if sidebar.flags %}
+        {% for flag in sidebar.flags %}
+        <div class="flag-card">
+          <div class="flag-query">
+            {{ flag.query_text[:65] }}{% if flag.query_text|length > 65 %}…{% endif %}
+          </div>
+          <div class="flag-reason">{{ flag.reason }}</div>
+          <div class="flag-meta">{{ flag.created_at }} — {{ flag.flagged_by_name }}</div>
+          <form method="POST" action="/ai/flags/{{ flag.id }}/resolve"
+                style="margin-top:6px;">
+            <button class="btn btn-sm btn-green" type="submit">Mark Reviewed</button>
+          </form>
+        </div>
+        {% endfor %}
+        <hr class="divider">
+      {% else %}
+        <p class="empty-msg" style="margin-bottom:10px;">No pending flags.</p>
+      {% endif %}
+      <a href="/ai/flags" class="btn btn-sm btn-muted">View All Flags</a>
+    </div>
+
+    {% elif role == 'instructor' %}
+    <!-- Instructor: active courses + enrolled students -->
+    <div class="box">
+      <h3>Your Active Courses</h3>
+      {% if sidebar.courses %}
+        {% for course in sidebar.courses %}
+        <div class="course-card">
+          <div class="course-name">{{ course.course_name }}</div>
+          <div class="course-meta">
+            {{ course.time_slot }} &nbsp;|&nbsp;
+            {{ course.enrolled_count }}/{{ course.capacity }} enrolled
+          </div>
+          {% if course.students %}
+          <div class="student-pills">
+            {% for name in course.students %}
+            <span class="student-pill">{{ name }}</span>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty-msg" style="margin-top:6px; font-size:11px;">
+            No enrolled students yet.
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="empty-msg">No active courses assigned this semester.</p>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <!-- Visitor: capability guide -->
+    <div class="box visitor-info">
+      <h3>What Can I Ask?</h3>
+      <ul>
+        <li>Available courses and schedules</li>
+        <li>General academic policies</li>
+        <li>Programming and study concepts</li>
+        <li>Course capacity and availability</li>
+      </ul>
+      <hr class="divider">
+      <p style="font-size:13px; color:#555; margin-bottom:12px;">
+        Sign in for access to personal GPA, grade history,
+        and AI-powered course recommendations.
+      </p>
+      <a href="/login" class="btn">Sign In</a>
+    </div>
+    {% endif %}
+
+  </div>
 </div>
+
+<script>
+  function fill(text) {
+    var ta = document.getElementById('queryText');
+    ta.value = text;
+    document.getElementById('charCount').textContent = text.length;
+  }
+  var ta = document.getElementById('queryText');
+  if (ta) {
+    ta.addEventListener('input', function() {
+      document.getElementById('charCount').textContent = this.value.length;
+    });
+  }
+</script>
 </body>
 </html>
