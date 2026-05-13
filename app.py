@@ -678,6 +678,53 @@ def resolve_gpa_flag_route(flag_id):
 #End of Tanzina's code
 
 # ── REVIEWS ───────────────────────────────────────────────────────────────────
+@app.route('/reviews')
+def my_reviews_page():
+    """Landing page — student picks which enrolled course to review."""
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+ 
+    conn = get_db()
+ 
+    if session['role'] == 'student':
+        # All courses student has ever been enrolled in (any status)
+        enrolled_courses = conn.execute(
+            """SELECT DISTINCT c.id, c.course_name, c.time_slot,
+                      e.grade, e.status as enrollment_status,
+                      s.name as semester_name,
+                      r.id as review_id
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               JOIN semesters s ON c.semester_id = s.id
+               LEFT JOIN reviews r ON r.course_id = c.id AND r.student_id = e.student_id
+               WHERE e.student_id = ?
+               ORDER BY e.enrolled_at DESC""",
+            (session['user_id'],)
+        ).fetchall()
+        conn.close()
+        return render_template('conduct/my_reviews.html',
+                               courses=enrolled_courses,
+                               role=session['role'],
+                               username=session['username'])
+ 
+    else:
+        # Instructors and registrar see all courses with avg ratings
+        courses = conn.execute(
+            """SELECT c.id, c.course_name, c.time_slot,
+                      s.name as semester_name,
+                      AVG(r.star_rating) as avg_rating,
+                      COUNT(r.id) as review_count
+               FROM courses c
+               JOIN semesters s ON c.semester_id = s.id
+               LEFT JOIN reviews r ON r.course_id = c.id AND r.is_visible = 1
+               GROUP BY c.id
+               ORDER BY s.id DESC, c.course_name"""
+        ).fetchall()
+        conn.close()
+        return render_template('conduct/my_reviews.html',
+                               courses=courses,
+                               role=session['role'],
+                               username=session['username'])
 
 @app.route('/reviews/<int:course_id>')
 def view_reviews(course_id):
@@ -685,6 +732,20 @@ def view_reviews(course_id):
         return redirect(url_for('home'))
     conn = get_db()
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+ 
+    # Check if this student was ever enrolled (for showing/hiding the form)
+    was_enrolled = None
+    already_reviewed = None
+    if session['role'] == 'student':
+        was_enrolled = conn.execute(
+            "SELECT grade FROM enrollments WHERE student_id = ? AND course_id = ? ORDER BY enrolled_at DESC LIMIT 1",
+            (session['user_id'], course_id)
+        ).fetchone()
+        already_reviewed = conn.execute(
+            "SELECT id FROM reviews WHERE student_id = ? AND course_id = ?",
+            (session['user_id'], course_id)
+        ).fetchone()
+ 
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)
@@ -694,7 +755,9 @@ def view_reviews(course_id):
                            course_id=course_id,
                            avg_rating=avg_rating,
                            role=session['role'],
-                           username=session['username'])
+                           username=session['username'],
+                           was_enrolled=was_enrolled,
+                           already_reviewed=already_reviewed)
  
 @app.route('/reviews/submit/<int:course_id>', methods=['POST'])
 def submit_review_route(course_id):

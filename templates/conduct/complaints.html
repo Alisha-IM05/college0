@@ -1,61 +1,278 @@
-{% extends "base.html" %}
-{% block title %}Complaints — College0{% endblock %}
-
-{% block content %}
-<h1 class="page-title">Complaints</h1>
-
-{% if message %}
-<div class="alert alert-success">{{ message }}</div>
-{% endif %}
-
-{% if role != 'registrar' %}
-<div class="card mb-2">
-  <h2 style="margin-bottom:1rem;">File a Complaint</h2>
-  <form method="POST" action="/complaints/file">
-    <div class="form-group">
-      <label>User ID of person you are complaining about</label>
-      <input type="number" name="filed_against" placeholder="Enter user ID" required />
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <textarea name="description" rows="4" placeholder="Describe the issue..."></textarea>
-    </div>
-    <button type="submit" class="btn btn-primary">Submit Complaint</button>
-  </form>
-</div>
-{% endif %}
-
-{% if role == 'registrar' %}
-<div class="card">
-  <h2 style="margin-bottom:1rem;">Pending Complaints</h2>
-  {% if complaints %}
-    {% for complaint in complaints %}
-    <div style="border-left:4px solid var(--warn);padding:1rem 1.25rem;margin-bottom:1rem;background:#fffaf5;border-radius:6px;">
-      <p class="mb-1"><strong>Filed by:</strong> {{ complaint['filed_by_name'] }}</p>
-      <p class="mb-1"><strong>Against:</strong> {{ complaint['filed_against_name'] }}</p>
-      <p class="mb-1"><strong>Description:</strong> {{ complaint['description'] }}</p>
-      <p class="text-muted text-sm mb-2">Filed on: {{ complaint['created_at'] }}</p>
-      <form method="POST" action="/complaints/resolve/{{ complaint['id'] }}">
-        <div class="grid-2" style="gap:.75rem;margin-bottom:.75rem;">
-          <div class="form-group" style="margin:0;">
-            <label>User ID to warn</label>
-            <input type="number" name="warn_user_id" placeholder="User ID" required />
-          </div>
-          <div class="form-group" style="margin:0;">
-            <label>Resolution notes</label>
-            <input type="text" name="resolution_text" placeholder="Resolution notes" required />
-          </div>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>College0 - Complaints</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
+        .navbar {
+            background-color: #2E4A7A;
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .navbar h1 { margin: 0; font-size: 22px; }
+        .navbar a { color: white; text-decoration: none; margin-left: 20px; }
+        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
+        .box {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin-bottom: 25px;
+        }
+        h2 { color: #2E4A7A; margin-top: 0; }
+        h3 { color: #2E4A7A; margin-top: 0; }
+        label { display: block; margin-top: 12px; font-weight: bold; color: #333; }
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            margin: 6px 0 12px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+        }
+        button {
+            padding: 10px 22px;
+            background-color: #2E4A7A;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 8px;
+            margin-top: 6px;
+        }
+        button:hover { background-color: #1a3357; }
+        button.accept { background-color: #28a745; }
+        button.accept:hover { background-color: #1e7e34; }
+        button.reject { background-color: #dc3545; }
+        button.reject:hover { background-color: #bd2130; }
+        .complaint-card {
+            border-left: 4px solid #e67e22;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            background: #fffaf5;
+            border-radius: 5px;
+        }
+        .complaint-card p { margin: 5px 0; font-size: 14px; }
+        .complaint-card .meta { color: #888; font-size: 12px; margin-top: 8px; }
+        .resolve-section {
+            margin-top: 15px;
+            padding-top: 12px;
+            border-top: 1px solid #eee;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .badge-student   { background: #cce5ff; color: #004085; }
+        .badge-instructor { background: #e2d9f3; color: #4a235a; }
+        .badge-warning   { background: #fff3cd; color: #856404; }
+        .badge-deregister { background: #f8d7da; color: #721c24; }
+        .message { padding: 12px 16px; border-radius: 5px; margin-bottom: 20px; font-weight: bold; }
+        .message.success { background: #d4edda; color: #155724; border-left: 4px solid #28a745; }
+        .message.warning { background: #fff3cd; color: #856404; border-left: 4px solid #ffc107; }
+        .message.error   { background: #f8d7da; color: #721c24; border-left: 4px solid #dc3545; }
+        .no-complaints   { color: #888; font-style: italic; }
+        .divider { border: none; border-top: 2px solid #eee; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>College0 — Complaints</h1>
+        <div>
+            <a href="/dashboard">Dashboard</a>
+            <a href="/warnings">My Warnings</a>
+            <a href="/logout">Logout</a>
         </div>
-        <button type="submit" class="btn btn-primary">Resolve &amp; Issue Warning</button>
-      </form>
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty-state">
-      <div class="icon">📭</div>
-      No pending complaints.
+
+    <div class="container">
+
+        {% if message %}
+        <div class="message {{ message_type }}">{{ message }}</div>
+        {% endif %}
+
+        <!-- ── STUDENT: file a complaint against anyone ────────────────── -->
+        {% if role == 'student' %}
+        <div class="box">
+            <h2>File a Complaint</h2>
+            <p style="color:#555; font-size:14px;">
+                You can file a complaint against a student or instructor.
+                You cannot file a complaint against yourself.
+                The registrar will review and resolve all complaints.
+            </p>
+            <form method="POST" action="/complaints/file/student">
+                <label>Who are you complaining about?</label>
+                <select name="filed_against" required>
+                    <option value="">— Select a user —</option>
+                    {% for user in all_users %}
+                        <option value="{{ user['id'] }}">
+                            {{ user['username'] }} ({{ user['role'] }})
+                        </option>
+                    {% endfor %}
+                </select>
+                <label>Description of the issue:</label>
+                <textarea name="description" rows="5"
+                    placeholder="Describe the issue clearly and honestly..."></textarea>
+                <button type="submit">Submit Complaint</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- ── INSTRUCTOR: two complaint forms ───────────────────────────── -->
+        {% if role == 'instructor' %}
+
+        <!-- Instructor files against a student in their course (J-012) -->
+        <div class="box">
+            <h2>File a Complaint Against a Student</h2>
+            <p style="color:#555; font-size:14px;">
+                You can only file complaints against students enrolled in your courses.
+                You must specify a requested action: a warning or de-registration.
+            </p>
+            {% if my_students %}
+            <form method="POST" action="/complaints/file/instructor">
+                <label>Student:</label>
+                <select name="student_id" required>
+                    <option value="">— Select a student —</option>
+                    {% for s in my_students %}
+                    <option value="{{ s['id'] }}">{{ s['username'] }}</option>
+                    {% endfor %}
+                </select>
+                <label>Description of the issue:</label>
+                <textarea name="description" rows="5"
+                    placeholder="Describe the conduct issue clearly..."></textarea>
+                <label>Requested Action:</label>
+                <select name="requested_action" required>
+                    <option value="">— Choose action —</option>
+                    <option value="warning">Issue a Warning</option>
+                    <option value="deregister">De-register Student from My Courses</option>
+                </select>
+                <button type="submit">Submit Complaint</button>
+            </form>
+            {% else %}
+            <p class="no-complaints">You have no students enrolled in your courses to file a complaint against.</p>
+            {% endif %}
+        </div>
+
+        <!-- Instructor files general complaint as a person (J-001) -->
+        <div class="box">
+            <h2>File a General Complaint</h2>
+            <p style="color:#555; font-size:14px;">
+                You can also file a complaint against another user (e.g. another instructor or student).
+            </p>
+            <form method="POST" action="/complaints/file/student">
+                <label>Who are you complaining about?</label>
+                <select name="filed_against" required>
+                    <option value="">— Select a user —</option>
+                    {% for user in all_users %}
+                    <option value="{{ user['id'] }}">
+                        {{ user['username'] }} ({{ user['role'] }})
+                    </option>
+                    {% endfor %}
+                </select>
+                <label>Description of the issue:</label>
+                <textarea name="description" rows="5"
+                    placeholder="Describe the issue clearly..."></textarea>
+                <button type="submit">Submit Complaint</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- ── REGISTRAR: see and resolve all pending complaints ──────────── -->
+        {% if role == 'registrar' %}
+        <div class="box">
+            <h2>Pending Complaints</h2>
+
+            {% if complaints %}
+                {% for c in complaints %}
+                <div class="complaint-card">
+                    <p>
+                        <strong>Filed by:</strong> {{ c['filed_by_name'] }}
+                        <span class="badge badge-{{ c['filed_by_role'] }}">{{ c['filed_by_role'] }}</span>
+                        &nbsp;&nbsp;
+                        <strong>Against:</strong> {{ c['filed_against_name'] }}
+                        <span class="badge badge-{{ c['filed_against_role'] }}">{{ c['filed_against_role'] }}</span>
+                    </p>
+                    <p><strong>Description:</strong> {{ c['description'] }}</p>
+
+                    {% if c['requested_action'] %}
+                    <p>
+                        <strong>Requested Action:</strong>
+                        <span class="badge {{ 'badge-deregister' if c['requested_action'] == 'deregister' else 'badge-warning' }}">
+                            {{ 'De-register Student' if c['requested_action'] == 'deregister' else 'Issue Warning' }}
+                        </span>
+                    </p>
+                    {% endif %}
+
+                    <p class="meta">Complaint type: {{ c['complaint_type'] }} &nbsp;·&nbsp; Filed: {{ c['created_at'] }}</p>
+
+                    <div class="resolve-section">
+
+                        <!-- Instructor complaint: accept or reject (J-015) -->
+                        {% if c['complaint_type'] == 'instructor' %}
+                        <h3>Resolve Instructor Complaint</h3>
+                        <p style="font-size:13px; color:#555;">
+                            <strong>Accept</strong> → student gets warned
+                            {% if c['requested_action'] == 'deregister' %} and de-registered{% endif %}.
+                            <strong>Reject</strong> → instructor gets warned for filing.
+                        </p>
+                        <form method="POST" action="/complaints/resolve/instructor/{{ c['id'] }}">
+                            <label>Resolution Notes (required):</label>
+                            <textarea name="resolution_text" rows="3"
+                                placeholder="Explain your decision..."></textarea>
+                            <button type="submit" name="decision" value="accept" class="accept">
+                                ✅ Accept — Warn Student{% if c['requested_action'] == 'deregister' %} + De-register{% endif %}
+                            </button>
+                            <button type="submit" name="decision" value="reject" class="reject">
+                                ❌ Reject — Warn Instructor
+                            </button>
+                        </form>
+
+                        <!-- Student/general complaint: choose who to warn (J-008/J-009) -->
+                        {% else %}
+                        <h3>Resolve Complaint</h3>
+                        <p style="font-size:13px; color:#555;">
+                            Choose who to warn: the person who filed, or the person who was reported.
+                        </p>
+                        <form method="POST" action="/complaints/resolve/student/{{ c['id'] }}">
+                            <label>Who should receive the warning?</label>
+                            <select name="warn_user_id" required>
+                                <option value="">— Select —</option>
+                                <option value="{{ c['filed_by'] }}">
+                                    {{ c['filed_by_name'] }} (filed the complaint)
+                                </option>
+                                <option value="{{ c['filed_against'] }}">
+                                    {{ c['filed_against_name'] }} (was reported)
+                                </option>
+                            </select>
+                            <label>Resolution Notes (required):</label>
+                            <textarea name="resolution_text" rows="3"
+                                placeholder="Explain your decision..."></textarea>
+                            <button type="submit">Resolve &amp; Issue Warning</button>
+                        </form>
+                        {% endif %}
+
+                    </div>
+                </div>
+
+                {% if not loop.last %}<hr class="divider">{% endif %}
+                {% endfor %}
+
+            {% else %}
+                <p class="no-complaints">✅ No pending complaints at this time.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
     </div>
-  {% endif %}
-</div>
-{% endif %}
-{% endblock %}
+</body>
+</html>
