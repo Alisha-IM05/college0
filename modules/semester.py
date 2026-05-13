@@ -7,18 +7,18 @@ GPA_MAP = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
 
 
 def get_current_semester():
-    """Returns the most advanced active semester row, or None."""
+    """Returns the active semester — newest non-completed semester first."""
     conn = get_db()
     try:
         return conn.execute(
             """SELECT * FROM semesters
                ORDER BY CASE current_period
-                   WHEN 'setup' THEN 1
-                   WHEN 'registration' THEN 2
-                   WHEN 'special_registration' THEN 3
-                   WHEN 'running' THEN 4
                    WHEN 'grading' THEN 5
-               END DESC LIMIT 1"""
+                   WHEN 'running' THEN 4
+                   WHEN 'special_registration' THEN 3
+                   WHEN 'registration' THEN 2
+                   WHEN 'setup' THEN 1
+               END ASC, id DESC LIMIT 1"""
         ).fetchone()
     finally:
         conn.close()
@@ -27,6 +27,25 @@ def get_current_period():
     """Returns the current period string, or None."""
     sem = get_current_semester()
     return sem['current_period'] if sem else None
+
+def get_active_semester():
+    """Returns the newest semester that still has work to do (not grading-completed)."""
+    conn = get_db()
+    try:
+        # Prefer any semester not in grading, newest first
+        result = conn.execute(
+            """SELECT * FROM semesters
+               WHERE current_period != 'grading'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        # If all semesters are in grading, just return the newest
+        if result is None:
+            result = conn.execute(
+                "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return result
+    finally:
+        conn.close()
 
 
 # Move a semester to the next period.
@@ -80,10 +99,20 @@ def advance_period(semester_id):
             conn.commit()
             # Reset special_registration for all students
             conn.execute("UPDATE students SET special_registration = 0")
-            conn.execute(
-                "INSERT INTO semesters (name, current_period) VALUES (?, 'setup')",
-                (new_name,)
-            )
+            # Check if next semester already exists — don't create a duplicate
+            existing = conn.execute(
+                "SELECT * FROM semesters WHERE name = ?", (new_name,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE semesters SET current_period = 'setup' WHERE id = ?",
+                    (existing['id'],)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO semesters (name, current_period) VALUES (?, 'setup')",
+                    (new_name,)
+                )
             conn.commit()
             return f"New semester {new_name} created in setup period"
         current_index = PERIOD_ORDER.index(current_period)
@@ -223,6 +252,15 @@ def register_student(student_id, course_id):
         # Only allow retake if previous grade was F
         if past_grade and past_grade['letter_grade'] != 'F':
             return 'Student cannot retake a course without a prior F grade'
+        # Check for missing time slot data — treat as unsafe
+        new_course = conn.execute(
+            "SELECT day_of_week, start_time, end_time FROM courses WHERE id = ?",
+            (course_id,)
+        ).fetchone()
+        if new_course and (new_course['day_of_week'] is None or 
+                        new_course['start_time'] is None or 
+                        new_course['end_time'] is None):
+            return 'Cannot register — course time slot data is incomplete. Contact the registrar.'
         # Check for time conflicts
         conflict_course = get_conflict_course(student_id, course_id, conn)
         if conflict_course:
@@ -552,17 +590,23 @@ def enforce_minimums(semester_id):
                     (instructor['instructor_id'],)
                 )
         # Open special registration again
-        conn.execute(
-            """
-            UPDATE semesters
-            SET current_period = 'registration'
-            WHERE id = ?
-            """,
+        cancelled_courses = conn.execute(
+            """SELECT * FROM courses
+               WHERE semester_id = ? AND status = 'cancelled'""",
             (semester_id,)
-        )
-        # Warn students whose courses were cancelled
+        ).fetchall()
+        cancelled_count = len(cancelled_courses)
+
+        # NOW safe to use cancelled_count
+        if cancelled_count > 0:
+            conn.execute(
+                """UPDATE semesters
+                   SET current_period = 'special_registration'
+                   WHERE id = ?""",
+                (semester_id,)
+            )
+
         warn_underenrolled_students(semester_id, conn)
-        
         affected_students = conn.execute(
             """SELECT DISTINCT e.student_id
                FROM enrollments e
@@ -573,22 +617,11 @@ def enforce_minimums(semester_id):
         for s in affected_students:
             conn.execute(
                 """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
-                (
-                    s['student_id'],
-                    'One or more of your courses was cancelled due to low enrollment. Special registration is now open for you.'
-                )
+                (s['student_id'],
+                 'One or more of your courses was cancelled. Special registration is now open for you.')
             )
 
-        # G-028: Notify instructors about cancelled courses
-        cancelled_courses = conn.execute(
-            """SELECT * FROM courses
-               WHERE semester_id = ? AND status = 'cancelled'""",
-            (semester_id,)
-        ).fetchall()
-
-        cancelled_count = len(cancelled_courses)
         affected_count = len(affected_students)
-
         conn.commit()
 
         if cancelled_count == 0:
@@ -865,10 +898,7 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
                     'GPA between 2.0 and 2.25 — probation interview required'
                 )
             )
-            conn.execute(
-                "UPDATE users SET status = 'probation' WHERE id = ?",
-                (student_id,)
-            )
+
         # Count how many semesters this student has grades for
         semester_count = conn.execute(
             """

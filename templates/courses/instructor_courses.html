@@ -55,7 +55,10 @@
                 <th>Semester</th>
                 <th>Period</th>
                 <th>Enrolled</th>
-                <th>Waitlist</th>
+                <th> {% if semester and semester['current_period'] == 'grading' %} Left to Grade
+                    {% else %} Waitlist
+                    {% endif %}</th>
+
                 <th>Action</th>
             </tr>
             {% for course in courses %}
@@ -66,12 +69,23 @@
                 <td><span class="badge {{ course['current_period'] }}">{{ course['current_period'] | upper }}</span></td>
                 <td>{{ course['enrolled_count'] }} / {{ course['capacity'] }}</td>
                 <td>
-                    {% if course['waitlist_count'] > 0 %}
-                        <span style="background:#e67e22;color:white;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">
-                            {{ course['waitlist_count'] }} waiting
-                        </span>
+                    {% if semester and semester['current_period'] == 'grading' %}
+                        {% set left = course['enrolled_count'] - enrolled_counts.get(course['id'], 0) %}
+                        {% if left > 0 %}
+                            <span style="background:#cc0000;color:white;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">
+                                {{ left }} left
+                            </span>
+                        {% else %}
+                            <span style="color:green;font-size:13px;font-weight:bold;">✓ Done</span>
+                        {% endif %}
                     {% else %}
-                        <span style="color:#888;font-size:13px;">None</span>
+                        {% if course['waitlist_count'] > 0 %}
+                            <span style="background:#e67e22;color:white;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">
+                                {{ course['waitlist_count'] }} waiting
+                            </span>
+                        {% else %}
+                            <span style="color:#888;font-size:13px;">None</span>
+                        {% endif %}
                     {% endif %}
                 </td>
                 <td><a class="btn" href="/courses/{{ course['id'] }}">

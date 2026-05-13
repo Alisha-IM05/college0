@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS semesters (
 CREATE TABLE IF NOT EXISTS semester_periods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     semester_id INTEGER NOT NULL,
-    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'running', 'grading')),
+    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'special_registration', 'running', 'grading')),
     start_date TIMESTAMP,
     end_date TIMESTAMP,
     FOREIGN KEY (semester_id) REFERENCES semesters(id)
