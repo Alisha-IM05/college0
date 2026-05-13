@@ -124,7 +124,7 @@ def _rows_to_dicts(rows):
 # Routes that a user with must_change_password=1 is still allowed to hit.
 _ALLOWED_DURING_PW_CHANGE = {
     'change_password_page', 'change_password_submit',
-    'logout', 'static',
+    'logout', 'static', 'apply_status', 'apply_page', 'apply_submit',
 }
 
 

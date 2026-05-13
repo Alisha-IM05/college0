@@ -47,7 +47,7 @@ export function Login(): React.ReactElement {
           <div className="apply-links">
             <a href="/apply">Apply for an account</a>
             {' · '}
-            <a href="/apply/status">Check application status</a>
+            <a href="/apply/status/">Check application status</a>
           </div>
         </SignedOut>
 
