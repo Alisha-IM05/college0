@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 from jinja2 import ChoiceLoader, FileSystemLoader
-from modules.ai_features import init_vector_db, register_ai_routes
+from modules.ai_features import register_ai_routes
 from database.db import init_db, get_db
 
 from modules.conduct import (
@@ -22,7 +22,6 @@ app.secret_key = 'college0secretkey'
 # initialize the database and vector store when the app starts
 with app.app_context():
     init_db()
-    init_vector_db()   # loads ChromaDB — fails gracefully if GOOGLE_API_KEY is missing
 
 register_ai_routes(app)   # Subsystem 5 — mounts all /ai/* routes from modules/ai_features.py
 
@@ -32,27 +31,175 @@ register_ai_routes(app)   # Subsystem 5 — mounts all /ai/* routes from modules
 def create_test_users():
     conn = get_db()
     test_users = [
-        ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
-        ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('student1', 'student1@college0.com', 'password123', 'student'),
-        ('student2',   'student2@college0.com',   'password123', 'student'),
+        ('registrar1', 'registrar1@college0.com', 'password', 'registrar'),
+        ('instructor1', 'instructor1@college0.com', 'password', 'instructor'),
+        ('instructor2', 'instructor2@college0.com', 'password', 'instructor'),
+        ('student1', 'student1@college0.com', 'password', 'student'),
+        ('student2',   'student2@college0.com',   'password', 'student'),
+        ('nathan', 'nathan@college0.com', 'password', 'student'),
+        ('maya', 'maya@college0.com', 'password', 'student'),
+        ('liam', 'liam@college0.com', 'password', 'student'),
     ]
     for username, email, password, role in test_users:
-        try:
-            conn.execute(
-                "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)",
-                (username, email, password, role)
-            )
-            if role == 'student':
-                user = conn.execute(
-                    "SELECT id FROM users WHERE username = ?", (username,)
-                ).fetchone()
-                conn.execute(
-                    "INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],)
-                )
-        except:
-            pass
+        conn.execute(
+            """INSERT OR IGNORE INTO users (username, email, password, role)
+               VALUES (?, ?, ?, ?)""",
+            (username, email, password, role)
+        )
+        conn.execute(
+            "UPDATE users SET password = ?, role = ? WHERE username = ?",
+            (password, role, username)
+        )
+        if role == 'student':
+            user = conn.execute(
+                "SELECT id FROM users WHERE username = ?", (username,)
+            ).fetchone()
+            conn.execute("INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],))
 
+    conn.execute(
+        """DELETE FROM students
+           WHERE id IN (SELECT s.id FROM students s JOIN users u ON s.id = u.id WHERE u.role != 'student')"""
+    )
+
+    def user_id(username):
+        row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        return row['id'] if row else None
+
+    instructor1 = user_id('instructor1')
+    instructor2 = user_id('instructor2')
+
+    conn.execute(
+        "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (1, 'Spring 2026', 'running')"
+    )
+    conn.execute(
+        "UPDATE semesters SET current_period = 'running' WHERE id = 1"
+    )
+
+    demo_courses = [
+        ('CS101 - Intro to Computing', instructor1, 'Mon/Wed', 1, '10:00', '11:30', 30),
+        ('CS201 - Data Structures', instructor1, 'Tue/Thu', 3, '13:00', '14:30', 30),
+        ('MATH101 - Calculus I', instructor2, 'Mon/Wed', 1, '14:00', '15:30', 30),
+        ('ENG101 - English Composition', instructor2, 'Fri', 5, '09:00', '12:00', 30),
+        ('CS310 - Algorithms', instructor1, 'Mon/Wed', 1, '12:00', '13:30', 25),
+        ('CS410 - Machine Learning', instructor2, 'Tue/Thu', 3, '10:00', '11:30', 20),
+    ]
+    for name, instructor_id, slot, day, start, end, cap in demo_courses:
+        existing = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE courses
+                   SET instructor_id = ?, time_slot = ?, day_of_week = ?,
+                       start_time = ?, end_time = ?, capacity = ?, status = 'active'
+                   WHERE id = ?""",
+                (instructor_id, slot, day, start, end, cap, existing['id'])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO courses
+                   (course_name, instructor_id, time_slot, day_of_week, start_time,
+                    end_time, capacity, semester_id, enrolled_count, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')""",
+                (name, instructor_id, slot, day, start, end, cap)
+            )
+
+    def course_id(name):
+        row = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        return row['id'] if row else None
+
+    demo_students = {
+        'student1': {'semester_gpa': 3.20, 'cumulative_gpa': 3.15, 'credits_earned': 42, 'status': 'active', 'honor_roll': 0},
+        'student2': {'semester_gpa': 2.70, 'cumulative_gpa': 2.85, 'credits_earned': 36, 'status': 'active', 'honor_roll': 0},
+        'nathan': {'semester_gpa': 3.42, 'cumulative_gpa': 3.42, 'credits_earned': 48, 'status': 'active', 'honor_roll': 0},
+        'maya': {'semester_gpa': 3.90, 'cumulative_gpa': 3.88, 'credits_earned': 72, 'status': 'active', 'honor_roll': 1},
+        'liam': {'semester_gpa': 1.80, 'cumulative_gpa': 1.95, 'credits_earned': 30, 'status': 'probation', 'honor_roll': 0},
+    }
+    for username, data in demo_students.items():
+        sid = user_id(username)
+        if sid:
+            conn.execute(
+                """UPDATE students
+                   SET semester_gpa = ?, cumulative_gpa = ?, credits_earned = ?,
+                       status = ?, honor_roll = ?
+                   WHERE id = ?""",
+                (
+                    data['semester_gpa'], data['cumulative_gpa'],
+                    data['credits_earned'], data['status'], data['honor_roll'], sid
+                )
+            )
+
+    demo_enrollments = {
+        'student1': ['CS101 - Intro to Computing', 'ENG101 - English Composition'],
+        'student2': ['MATH101 - Calculus I'],
+        'nathan': ['CS101 - Intro to Computing', 'CS201 - Data Structures', 'CS410 - Machine Learning'],
+        'maya': ['CS310 - Algorithms', 'CS410 - Machine Learning'],
+        'liam': ['ENG101 - English Composition', 'MATH101 - Calculus I'],
+    }
+    for username, course_names in demo_enrollments.items():
+        sid = user_id(username)
+        for course_name in course_names:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    """SELECT id FROM enrollments
+                       WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+                    (sid, cid)
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+                        (sid, cid)
+                    )
+
+    grade_values = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
+    demo_grades = {
+        'student1': [('CS101 - Intro to Computing', 'B')],
+        'student2': [('ENG101 - English Composition', 'B')],
+        'nathan': [('CS101 - Intro to Computing', 'A'), ('ENG101 - English Composition', 'B')],
+        'maya': [('CS101 - Intro to Computing', 'A'), ('CS201 - Data Structures', 'A')],
+        'liam': [('CS101 - Intro to Computing', 'D'), ('CS201 - Data Structures', 'F')],
+    }
+    for username, grades in demo_grades.items():
+        sid = user_id(username)
+        for course_name, letter in grades:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    "SELECT id FROM grades WHERE student_id = ? AND course_id = ?",
+                    (sid, cid)
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "UPDATE grades SET letter_grade = ?, numeric_value = ? WHERE id = ?",
+                        (letter, grade_values[letter], exists['id'])
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO grades
+                           (student_id, course_id, letter_grade, numeric_value)
+                           VALUES (?, ?, ?, ?)""",
+                        (sid, cid, letter, grade_values[letter])
+                    )
+
+    course_ids = [
+        course_id(name) for name, *_ in demo_courses
+    ]
+    for cid in course_ids:
+        if cid:
+            count = conn.execute(
+                """SELECT COUNT(*) FROM enrollments
+                   WHERE course_id = ? AND status = 'enrolled'""",
+                (cid,)
+            ).fetchone()[0]
+            conn.execute("UPDATE courses SET enrolled_count = ? WHERE id = ?", (count, cid))
+
+    for word in ['hate', 'stupid', 'idiot']:
+        conn.execute("INSERT OR IGNORE INTO taboo_words (word) VALUES (?)", (word,))
 
     conn.commit()
     conn.close()
@@ -725,5 +872,4 @@ def remove_taboo(word):
 # ── RUN THE APP ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    init_vector_db()
     app.run(debug=True)

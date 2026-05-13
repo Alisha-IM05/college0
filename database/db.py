@@ -29,10 +29,13 @@ def seed_data():
     #    --- Zhuolin's users ---
 
     users = [
-        ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
-        ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('student1', 'student1@college0.com', 'password123', 'student'),
-        ('student2', 'student2@college0.com', 'password123', 'student'),
+        ('registrar1', 'registrar1@college0.com', 'password', 'registrar'),
+        ('instructor1', 'instructor1@college0.com', 'password', 'instructor'),
+        ('student1', 'student1@college0.com', 'password', 'student'),
+        ('student2', 'student2@college0.com', 'password', 'student'),
+        ('nathan', 'nathan@college0.com', 'password', 'student'),
+        ('maya', 'maya@college0.com', 'password', 'student'),
+        ('liam', 'liam@college0.com', 'password', 'student'),
     ]
     for username, email, password, role in users:
         conn.execute(

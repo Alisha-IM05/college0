@@ -5,6 +5,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from database.db import get_db
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 # K-013: Hardcoded baseline — always filtered regardless of DB table contents.
 # The DB taboo_words table adds to this list at runtime (managed by the registrar).
 TABOO_WORDS = [
@@ -12,6 +18,10 @@ TABOO_WORDS = [
     "worthless", "incompetent", "cheat", "cheater",
     "plagiarize", "plagiarism", "expel", "expelled",
     "loser", "failure",
+    "fuck", "fucking", "fucked", "fucker", "shit", "shitty",
+    "bullshit", "bitch", "bitches", "asshole", "dick", "dicks",
+    "crap", "damn", "bastard", "slut", "whore", "piss",
+    "suck", "sucks", "sucked", "sucking",
 ]
 
 DB_PATH = os.path.expanduser("~/college0/database/chroma_db")  # absolute chroma path — shared with seed_chroma.py
@@ -50,7 +60,7 @@ def log_query(user_id, query_text, response_text, source, role_at_query):
         db.close()
 
 
-def submit_query(user_id, _session_role, query_text):
+def submit_query(user_id, _session_role, query_text, active_student_id=None):
     # K-003: Single entry point — all security gates run here.
     # _session_role is accepted for API compatibility but NEVER trusted.
     # We always fetch the live role from database/college0.db.
@@ -97,8 +107,17 @@ def submit_query(user_id, _session_role, query_text):
     if not allowed:
         return {"error": deny_reason, "response": None, "source": None, "query_id": None}
 
+    target_student_id = None
+    if effective_role == "registrar":
+        target_student_id = find_student_reference(query_text) or active_student_id
+
+    enrollment_action = parse_enrollment_action(query_text, effective_role, target_student_id)
+    if enrollment_action:
+        msg, ok = enroll_from_ai(enrollment_action["student_id"], enrollment_action["course_id"])
+        response_text = msg
+        source = "vector_db"
     # K-016/K-019: If a student asks for recommendations, generate them inline
-    if effective_role == "student" and _is_recommendation_query(query_text):
+    elif effective_role == "student" and _is_recommendation_query(query_text):
         recs = generate_recommendations(user_id)
         if recs:
             lines = "\n".join(
@@ -107,25 +126,50 @@ def submit_query(user_id, _session_role, query_text):
             response_text = f"Based on your academic profile, here are your recommended courses:\n{lines}"
             source = "vector_db"
         else:
-            response_text, source = run_rag_pipeline(query_text, effective_role)
+            context = build_role_scoped_ai_context(user_id, effective_role)
+            response_text, source = query_gemini_with_role_context(
+                query_text, effective_role, context
+            )
+    elif effective_role == "registrar" and target_student_id and _is_recommendation_query(query_text):
+        recs = generate_recommendations(target_student_id)
+        student_name = get_student_username(target_student_id) or "that student"
+        if recs:
+            lines = "\n".join(
+                f"- {r['course']['course_name']}: {r['reason']}" for r in recs
+            )
+            response_text = f"Based on {student_name}'s academic profile, these courses are available to register:\n{lines}"
+        else:
+            response_text = f"No available recommendations were found for {student_name}."
+        source = "vector_db"
     else:
-        # Privacy: fetch the caller's own private data locally and inject it as
-        # trusted context — it bypasses the vector DB so cross-user leakage is impossible.
-        private_ctx = _fetch_private_context(user_id, effective_role, query_text)
-        response_text, source = run_rag_pipeline(query_text, effective_role, private_context=private_ctx)
+        context = build_role_scoped_ai_context(user_id, effective_role, target_student_id)
+        response_text, source = query_gemini_with_role_context(
+            query_text, effective_role, context
+        )
 
     # K-013: Scrub taboo words from both sides before logging.
     # query_text was already used for RAG search above (original needed for accuracy).
     # logged_query is the sanitized version stored in ai_queries — DB always matches UI.
+    raw_response_text = response_text
     response_text  = apply_taboo_filter(response_text)
     logged_query   = apply_taboo_filter(query_text)
+    response_taboo_filtered = raw_response_text != response_text
+    query_taboo_filtered = logged_query != query_text
+    taboo_filtered = response_taboo_filtered or query_taboo_filtered
+    taboo_count = response_text.count("****") + logged_query.count("****")
 
     query_id = log_query(user_id, logged_query, response_text, source, effective_role)
     return {
         "response": response_text,
+        "display_query": logged_query,
         "source":   source,
         "query_id": query_id,
         "error":    None,
+        "hallucination_warning": source == "llm",
+        "taboo_filtered": taboo_filtered,
+        "taboo_count": taboo_count,
+        "active_student_id": target_student_id,
+        "active_student_name": get_student_username(target_student_id) if target_student_id else None,
         "debug":    _last_query_debug.copy(),  # distance scores for metadata panel
     }
 
@@ -133,15 +177,547 @@ def submit_query(user_id, _session_role, query_text):
 def _is_recommendation_query(query_text):
     # Helper: True if the query is asking for course recommendations
     q = query_text.lower()
-    keywords = ["recommend", "suggestion", "what course should", "which course", "should i take"]
+    keywords = [
+        "recommend", "recommendation", "suggest", "suggestion",
+        "what course should", "which course", "should i take",
+        "what classes should", "what class should", "what courses should",
+        "what else can i register", "what can i register", "can i register",
+        "available to register", "register him for", "register her for",
+        "register them for",
+    ]
     return any(kw in q for kw in keywords)
+
+
+def find_student_reference(query_text):
+    """Return a student id when a registrar names a student in the query."""
+    q = (query_text or "").lower()
+    db = get_db()
+    try:
+        rows = db.execute(
+            """SELECT u.id, u.username, u.email
+               FROM users u
+               WHERE u.role = 'student'
+               ORDER BY LENGTH(u.username) DESC"""
+        ).fetchall()
+        for row in rows:
+            username = (row["username"] or "").lower()
+            email_prefix = (row["email"] or "").split("@", 1)[0].lower()
+            names = {username, email_prefix}
+            for name in names:
+                if name and re.search(r"\b" + re.escape(name) + r"\b", q):
+                    return row["id"]
+    finally:
+        db.close()
+    return None
+
+
+def get_student_username(student_id):
+    if not student_id:
+        return None
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT username FROM users WHERE id = ? AND role = 'student'",
+            (student_id,),
+        ).fetchone()
+        return row["username"] if row else None
+    finally:
+        db.close()
+
+
+def parse_enrollment_action(query_text, role, active_student_id=None):
+    """Detect chat commands like 'enroll/register Nathan/him in CS310'."""
+    q = (query_text or "").lower()
+    if not any(word in q for word in ("enroll", "register", "sign up", "add him", "add her", "add them", "add me")):
+        return None
+
+    student_id = active_student_id
+    if role == "student":
+        student_id = None  # caller fills this with the logged-in user below
+    elif role != "registrar" or not student_id:
+        return None
+
+    course_id = find_course_reference(query_text)
+    if not course_id:
+        return None
+    return {"student_id": student_id, "course_id": course_id}
+
+
+def find_course_reference(query_text):
+    q = (query_text or "").lower()
+    db = get_db()
+    try:
+        rows = db.execute(
+            """SELECT id, course_name
+               FROM courses
+               WHERE status = 'active'
+               ORDER BY LENGTH(course_name) DESC"""
+        ).fetchall()
+        for row in rows:
+            course_name = row["course_name"] or ""
+            code = _course_code(course_name).lower()
+            title = course_name.lower()
+            title_part = title.split(" - ", 1)[1] if " - " in title else title
+            if (
+                (code and re.search(r"\b" + re.escape(code) + r"\b", q))
+                or (title and title in q)
+                or (title_part and len(title_part) > 3 and title_part in q)
+            ):
+                return row["id"]
+    finally:
+        db.close()
+    return None
+
+
+def build_role_scoped_ai_context(user_id, role, active_student_id=None):
+    """Build the only database context Gemini is allowed to see.
+
+    Student: only that student's profile, grades, enrollments, and public active courses.
+    Instructor: only their assigned courses plus enrolled student names for those courses.
+    Registrar: all students, grades, enrollments, courses, and AI moderation stats.
+    Visitor/unknown: public active course catalog only.
+    """
+    db = get_db()
+    try:
+        lines = []
+
+        if role == "student":
+            user = db.execute(
+                "SELECT id, username, email FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            student = db.execute(
+                """SELECT semester_gpa, cumulative_gpa, credits_earned,
+                          honor_roll, status, special_registration
+                   FROM students WHERE id = ?""",
+                (user_id,),
+            ).fetchone()
+            if not user or not student:
+                return ["No student record exists for this logged-in account."]
+
+            lines.append("ACCESS SCOPE: STUDENT_SELF_ONLY")
+            lines.append(
+                "Privacy rule: answer only about this logged-in student. "
+                "If asked about any other student, say you do not have access."
+            )
+            lines.append(
+                f"Logged-in student: {user['username']} (user_id {user['id']}, email {user['email']})."
+            )
+            lines.append(
+                "Academic profile: "
+                f"semester GPA {_fmt_num(student['semester_gpa'])}, "
+                f"cumulative GPA {_fmt_num(student['cumulative_gpa'])}, "
+                f"credits earned {student['credits_earned']}, "
+                f"standing {student['status']}, "
+                f"honor roll {'yes' if student['honor_roll'] else 'no'}, "
+                f"special registration {'yes' if student['special_registration'] else 'no'}."
+            )
+
+            grades, enrollments = _fetch_student_grades(db, user_id)
+            if grades:
+                lines.append("Completed grades:")
+                for grade in grades:
+                    lines.append(
+                        f"- {grade['course_name']}: {grade['letter_grade']} "
+                        f"({_fmt_num(grade['numeric_value'])}/4.0)"
+                    )
+            else:
+                lines.append("Completed grades: none on record.")
+
+            if enrollments:
+                lines.append("Current enrollments:")
+                for enrollment in enrollments:
+                    lines.append(
+                        f"- {enrollment['course_name']} at {enrollment['time_slot']}"
+                    )
+            else:
+                lines.append("Current enrollments: none.")
+
+            _append_public_course_catalog(db, lines)
+            return lines
+
+        if role == "instructor":
+            user = db.execute(
+                "SELECT id, username, email FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            lines.append("ACCESS SCOPE: INSTRUCTOR_ASSIGNED_COURSES_ONLY")
+            lines.append(
+                "Privacy rule: answer only about this instructor's assigned courses "
+                "and enrolled students in those courses. Do not reveal unrelated student records."
+            )
+            if user:
+                lines.append(
+                    f"Logged-in instructor: {user['username']} (user_id {user['id']}, email {user['email']})."
+                )
+            courses = db.execute(
+                """SELECT id, course_name, time_slot, start_time, end_time,
+                          capacity, enrolled_count, status
+                   FROM courses
+                   WHERE instructor_id = ?
+                   ORDER BY course_name""",
+                (user_id,),
+            ).fetchall()
+            if not courses:
+                lines.append("Assigned courses: none.")
+            for course in courses:
+                lines.append(
+                    f"Course {course['id']}: {course['course_name']}, "
+                    f"schedule {course['time_slot'] or ''} {course['start_time'] or ''}-{course['end_time'] or ''}, "
+                    f"status {course['status']}, enrollment {course['enrolled_count']}/{course['capacity']}."
+                )
+                students = db.execute(
+                    """SELECT u.username, s.cumulative_gpa, s.status
+                       FROM enrollments e
+                       JOIN users u ON e.student_id = u.id
+                       LEFT JOIN students s ON u.id = s.id
+                       WHERE e.course_id = ? AND e.status = 'enrolled'
+                       ORDER BY u.username""",
+                    (course["id"],),
+                ).fetchall()
+                if students:
+                    lines.append("  Enrolled students:")
+                    for student in students:
+                        lines.append(
+                            f"  - {student['username']} "
+                            f"(GPA {_fmt_num(student['cumulative_gpa'])}, standing {student['status']})"
+                        )
+                else:
+                    lines.append("  Enrolled students: none.")
+            _append_public_course_catalog(db, lines)
+            return lines
+
+        if role == "registrar":
+            lines.append("ACCESS SCOPE: REGISTRAR_FULL_DATABASE")
+            lines.append(
+                "Privacy rule: registrar may access all student academic records, "
+                "course enrollments, grades, AI logs, and flags."
+            )
+            students = db.execute(
+                """SELECT u.id, u.username, u.email,
+                          s.semester_gpa, s.cumulative_gpa, s.credits_earned,
+                          s.honor_roll, s.special_registration, s.status
+                   FROM users u
+                   LEFT JOIN students s ON u.id = s.id
+                   WHERE u.role = 'student'
+                   ORDER BY u.username"""
+            ).fetchall()
+            lines.append(f"Student count: {len(students)}.")
+            for student in students:
+                lines.append(
+                    f"Student {student['username']} (user_id {student['id']}, email {student['email']}): "
+                    f"semester GPA {_fmt_num(student['semester_gpa'])}, "
+                    f"cumulative GPA {_fmt_num(student['cumulative_gpa'])}, "
+                    f"credits {student['credits_earned'] or 0}, "
+                    f"standing {student['status'] or 'unknown'}, "
+                    f"honor roll {'yes' if student['honor_roll'] else 'no'}, "
+                    f"special registration {'yes' if student['special_registration'] else 'no'}."
+                )
+                grades, enrollments = _fetch_student_grades(db, student["id"])
+                if grades:
+                    lines.append("  Grades: " + "; ".join(
+                        f"{g['course_name']}={g['letter_grade']}" for g in grades
+                    ))
+                else:
+                    lines.append("  Grades: none.")
+                if enrollments:
+                    lines.append("  Enrollments: " + "; ".join(
+                        f"{e['course_name']} ({e['time_slot']})" for e in enrollments
+                    ))
+                else:
+                    lines.append("  Enrollments: none.")
+
+            _append_public_course_catalog(db, lines)
+            if active_student_id:
+                focused = db.execute(
+                    """SELECT u.id, u.username, u.email,
+                              s.semester_gpa, s.cumulative_gpa, s.credits_earned,
+                              s.honor_roll, s.special_registration, s.status
+                       FROM users u
+                       LEFT JOIN students s ON u.id = s.id
+                       WHERE u.id = ? AND u.role = 'student'""",
+                    (active_student_id,),
+                ).fetchone()
+                if focused:
+                    lines.append(
+                        f"ACTIVE REGISTRAR CHAT STUDENT: {focused['username']} "
+                        f"(user_id {focused['id']}). Follow-up words like him/her/them/that student "
+                        "refer to this student until another student is named."
+                    )
+                    grades, enrollments = _fetch_student_grades(db, focused["id"])
+                    lines.append("Active student grades: " + (
+                        "; ".join(f"{g['course_name']}={g['letter_grade']}" for g in grades)
+                        if grades else "none"
+                    ))
+                    lines.append("Active student enrollments: " + (
+                        "; ".join(f"{e['course_name']} ({e['time_slot']})" for e in enrollments)
+                        if enrollments else "none"
+                    ))
+            total_queries = db.execute("SELECT COUNT(*) FROM ai_queries").fetchone()[0]
+            pending_flags = db.execute(
+                "SELECT COUNT(*) FROM ai_flags WHERE status = 'pending'"
+            ).fetchone()[0]
+            lines.append(f"AI query log count: {total_queries}. Pending AI flags: {pending_flags}.")
+            return lines
+
+        lines.append("ACCESS SCOPE: PUBLIC_COURSE_CATALOG_ONLY")
+        lines.append("Privacy rule: do not reveal private student, grade, GPA, or enrollment records.")
+        _append_public_course_catalog(db, lines)
+        return lines
+    finally:
+        db.close()
+
+
+def _append_public_course_catalog(db, lines):
+    rows = db.execute(
+        """SELECT c.id, c.course_name, c.time_slot, c.start_time, c.end_time,
+                  c.capacity, c.enrolled_count, c.status,
+                  u.username AS instructor_name
+           FROM courses c
+           LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE c.status = 'active'
+           ORDER BY c.course_name"""
+    ).fetchall()
+    lines.append("Public active course catalog:")
+    if not rows:
+        lines.append("- No active courses.")
+    for row in rows:
+        seats = (row["capacity"] or 0) - (row["enrolled_count"] or 0)
+        schedule = row["time_slot"] or "TBD"
+        if row["start_time"] and row["end_time"]:
+            schedule = f"{schedule} {row['start_time']}-{row['end_time']}"
+        lines.append(
+            f"- Course {row['id']}: {row['course_name']}; instructor {row['instructor_name'] or 'TBD'}; "
+            f"schedule {schedule}; seats available {seats}/{row['capacity']}."
+        )
+
+
+def _fmt_num(value):
+    return "N/A" if value is None else f"{value:.2f}"
+
+
+def query_gemini_with_role_context(query_text, role, context_lines):
+    """Ask Gemini using only role-scoped database context, with no vector search."""
+    global _last_query_debug
+    _last_query_debug = {
+        "raw_distances": [],
+        "docs_returned": len(context_lines),
+        "docs_passed_threshold": len(context_lines),
+    }
+    context_block = "\n".join(f"- {line}" for line in context_lines)
+    role_ctx = get_role_context(role)
+    allowed_topics = ", ".join(role_ctx["topics"])
+
+    prompt = "\n".join([
+        "You are the College0 Academic Assistant.",
+        f"The logged-in user's role is '{role}'. Allowed topics: {allowed_topics}.",
+        "You must answer using ONLY the database context below.",
+        "Do not use outside knowledge for College0 facts.",
+        "Do not infer or invent grades, GPAs, enrollments, instructors, or student names.",
+        "Respect the ACCESS SCOPE and Privacy rule exactly.",
+        "If the user asks for information outside their scope, say they do not have access.",
+        "If the answer is not present in the context, say the database does not contain that information.",
+        "Keep the answer concise and use exact numbers from the context.",
+        "",
+        "DATABASE CONTEXT:",
+        context_block,
+        "",
+        f"USER QUESTION: {query_text}",
+    ])
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip(), "vector_db"
+    except Exception:
+        return _fallback_answer_from_context(query_text, role, context_lines), "vector_db"
+
+
+def submit_public_query(query_text):
+    """Visitor-safe query path: public catalog context only, no private records."""
+    valid, error = validate_query(query_text)
+    if not valid:
+        return {"error": error, "response": None, "source": None, "query_id": None}
+    allowed, deny_reason = filter_query_by_role(query_text, "visitor")
+    if not allowed:
+        return {"error": deny_reason, "response": None, "source": None, "query_id": None}
+    context = build_role_scoped_ai_context(None, "visitor")
+    response_text, source = query_gemini_with_role_context(query_text, "visitor", context)
+    raw_response_text = response_text
+    response_text = apply_taboo_filter(response_text)
+    display_query = apply_taboo_filter(query_text)
+    return {
+        "response": response_text,
+        "display_query": display_query,
+        "source": source,
+        "query_id": None,
+        "error": None,
+        "hallucination_warning": source == "llm",
+        "taboo_filtered": raw_response_text != response_text or display_query != query_text,
+        "taboo_count": response_text.count("****") + display_query.count("****"),
+        "debug": _last_query_debug.copy(),
+    }
+
+
+def _fallback_answer_from_context(query_text, role, context_lines):
+    q = query_text.lower()
+    relevant = []
+    if any(word in q for word in ("gpa", "grade", "grades", "standing", "credit")):
+        relevant = [
+            line for line in context_lines
+            if any(token in line.lower() for token in ("gpa", "grade", "standing", "credit"))
+        ]
+    elif any(word in q for word in ("course", "class", "enrolled", "enrollment", "schedule")):
+        relevant = [
+            line for line in context_lines
+            if any(token in line.lower() for token in ("course", "enrollment", "enrolled", "schedule"))
+        ]
+    if not relevant:
+        relevant = context_lines[:12]
+    return "Here is the relevant information from the database:\n" + "\n".join(relevant[:18])
+
+
+def enroll_from_ai(student_id, course_id):
+    """Chat-friendly enrollment used by recommendation cards.
+
+    This keeps the user on the assistant page and validates the same important
+    rules: active student, active course, not already enrolled, not already
+    passed by course code/name, seat availability, max load, and time conflict.
+    """
+    db = get_db()
+    try:
+        user = db.execute(
+            "SELECT role, status FROM users WHERE id = ?",
+            (student_id,),
+        ).fetchone()
+        if not user or user["role"] != "student":
+            return "Student access only.", False
+        if user["status"] == "suspended":
+            return "Your account is suspended. Please contact the registrar.", False
+
+        course = db.execute(
+            "SELECT * FROM courses WHERE id = ? AND status = 'active'",
+            (course_id,),
+        ).fetchone()
+        if not course:
+            return "That course is not available for enrollment.", False
+
+        already = db.execute(
+            """SELECT 1 FROM enrollments
+               WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+            (student_id, course_id),
+        ).fetchone()
+        if already:
+            return "You are already enrolled in this course.", False
+
+        course_code = _course_code(course["course_name"])
+        course_key = _course_identity_key(course["course_name"])
+
+        enrolled = db.execute(
+            """SELECT c.course_name
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'""",
+            (student_id,),
+        ).fetchall()
+        for row in enrolled:
+            if (
+                _course_code(row["course_name"]) == course_code
+                or _course_identity_key(row["course_name"]) == course_key
+            ):
+                return "You are already enrolled in an equivalent version of this course.", False
+
+        passed = db.execute(
+            """SELECT c.course_name, g.letter_grade
+               FROM grades g
+               JOIN courses c ON g.course_id = c.id
+               WHERE g.student_id = ? AND g.letter_grade != 'F'""",
+            (student_id,),
+        ).fetchall()
+        for row in passed:
+            if (
+                _course_code(row["course_name"]) == course_code
+                or _course_identity_key(row["course_name"]) == course_key
+            ):
+                return "You already completed this course.", False
+
+        load_count = db.execute(
+            """SELECT COUNT(*)
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+                 AND c.semester_id = ?""",
+            (student_id, course["semester_id"]),
+        ).fetchone()[0]
+        if load_count >= 4:
+            return "You already have the maximum of 4 enrolled courses.", False
+
+        if (course["enrolled_count"] or 0) >= (course["capacity"] or 0):
+            return "This course is full.", False
+
+        conflict = db.execute(
+            """SELECT c.course_name, c.time_slot, c.start_time, c.end_time
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'
+                 AND c.semester_id = ?""",
+            (student_id, course["semester_id"]),
+        ).fetchall()
+        new_days, new_start, new_end = _course_time_parts(course)
+        for row in conflict:
+            old_days, old_start, old_end = _course_time_parts(row)
+            if (
+                new_days and old_days and new_days & old_days
+                and new_start < old_end and old_start < new_end
+            ):
+                return f"Time conflict with {row['course_name']}.", False
+
+        db.execute(
+            "INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+            (student_id, course_id),
+        )
+        db.execute(
+            "UPDATE courses SET enrolled_count = enrolled_count + 1 WHERE id = ?",
+            (course_id,),
+        )
+        db.commit()
+        return f"Enrolled in {course['course_name']}.", True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _course_time_parts(course):
+    days = set((course["time_slot"] or "").split()[0].split("/")) if course["time_slot"] else set()
+    start = course["start_time"]
+    end = course["end_time"]
+    if not start or not end:
+        parts = (course["time_slot"] or "").split()
+        if len(parts) > 1 and "-" in parts[1]:
+            start, end = parts[1].split("-", 1)
+    return days, _time_to_minutes(start), _time_to_minutes(end)
+
+
+def _time_to_minutes(value):
+    if not value or ":" not in value:
+        return 0
+    hours, minutes = value.split(":", 1)
+    return int(hours) * 60 + int(minutes)
 
 
 # Keywords that trigger personal-data fetch for students
 _PRIVATE_DATA_KEYWORDS = [
-    "my gpa", "my grade", "my grades", "my course", "my courses",
-    "my schedule", "my enrollment", "my record", "my transcript",
-    "how am i doing", "what did i get",
+    # Broad single-word triggers so natural phrasing like "my current GPA" still matches
+    "gpa", "grade", "grades", "enrolled", "enrollment",
+    "my course", "my courses", "my schedule",
+    "my record", "my transcript", "credits",
+    "how am i doing", "what did i get", "academic standing",
+    "my standing", "academic summary",
 ]
 
 # Keywords that trigger academic-data fetch for registrars
@@ -228,6 +804,77 @@ def _format_grades_lines(grades, enrollments, label="This student"):
         enroll_str = ", ".join(f"{e['course_name']} ({e['time_slot']})" for e in enrollments)
         lines.append(f"{label}'s current enrollments: {enroll_str}.")
     return lines
+
+
+def _answer_student_private_query(user_id, role, query_text):
+    """Answer student-owned facts directly from SQLite.
+
+    GPA, grades, and enrollment are exact local facts. Sending them through the
+    LLM can produce role confusion or policy-style answers, so these stay
+    deterministic and use the same "vector_db" source badge as other local data.
+    """
+    q = query_text.lower()
+    asks_private_fact = any(kw in q for kw in _PRIVATE_DATA_KEYWORDS)
+    if not asks_private_fact:
+        return None
+
+    if role != "student":
+        if any(kw in q for kw in ("my gpa", "gpa", "my grade", "my grades")):
+            return "Only student accounts have a personal GPA in College0. Please log in as a student to view your GPA."
+        return None
+
+    db = get_db()
+    try:
+        student = db.execute(
+            """SELECT semester_gpa, cumulative_gpa, credits_earned, status
+               FROM students WHERE id = ?""",
+            (user_id,),
+        ).fetchone()
+        grades, enrollments = _fetch_student_grades(db, user_id)
+    finally:
+        db.close()
+
+    if not student:
+        return "No student academic record was found for your account."
+
+    wants_gpa = "gpa" in q or "how am i doing" in q or "academic summary" in q
+    wants_grades = "grade" in q or "grades" in q or "transcript" in q or "what did i get" in q
+    wants_enrollment = (
+        "course" in q or "courses" in q or "schedule" in q
+        or "enrolled" in q or "enrollment" in q
+    )
+
+    lines = []
+    if wants_gpa or not (wants_grades or wants_enrollment):
+        lines.append(
+            f"Your cumulative GPA is {(student['cumulative_gpa'] or 0):.2f}/4.0."
+        )
+        lines.append(
+            f"Your semester GPA is {(student['semester_gpa'] or 0):.2f}/4.0."
+        )
+        lines.append(f"Credits earned: {student['credits_earned'] or 0}.")
+        standing = student["status"] or "active"
+        lines.append(f"Academic standing: {standing}.")
+
+    if wants_grades:
+        if grades:
+            lines.append("Your completed course grades:")
+            for grade in grades:
+                lines.append(f"- {grade['course_name']}: {grade['letter_grade']}")
+        else:
+            lines.append("No completed grades are on record yet.")
+
+    if wants_enrollment:
+        if enrollments:
+            lines.append("You are currently enrolled in:")
+            for enrollment in enrollments:
+                lines.append(
+                    f"- {enrollment['course_name']} ({enrollment['time_slot']})"
+                )
+        else:
+            lines.append("You are not currently enrolled in any active courses.")
+
+    return "\n".join(lines)
 
 
 def _fetch_private_context(user_id, role, query_text):
@@ -542,20 +1189,28 @@ def get_all_flags(status_filter=None):
     try:
         if status_filter:
             rows = db.execute(
-                """SELECT f.*, u.username AS flagged_by_name, q.query_text
+                """SELECT f.*, u.username AS flagged_by_name,
+                          q.query_text, q.response_text, q.source, q.role_at_query,
+                          q.created_at AS query_created_at,
+                          owner.username AS query_owner_name
                    FROM ai_flags f
                    JOIN users u ON f.flagged_by = u.id
                    JOIN ai_queries q ON f.query_id = q.id
+                   LEFT JOIN users owner ON q.user_id = owner.id
                    WHERE f.status = ?
                    ORDER BY f.created_at DESC""",
                 (status_filter,),
             ).fetchall()
         else:
             rows = db.execute(
-                """SELECT f.*, u.username AS flagged_by_name, q.query_text
+                """SELECT f.*, u.username AS flagged_by_name,
+                          q.query_text, q.response_text, q.source, q.role_at_query,
+                          q.created_at AS query_created_at,
+                          owner.username AS query_owner_name
                    FROM ai_flags f
                    JOIN users u ON f.flagged_by = u.id
                    JOIN ai_queries q ON f.query_id = q.id
+                   LEFT JOIN users owner ON q.user_id = owner.id
                    ORDER BY f.created_at DESC"""
             ).fetchall()
         return [dict(r) for r in rows]
@@ -799,7 +1454,11 @@ def query_llm(query_text, context, role, private_context=None):
         response = model.generate_content(prompt)
         return response.text.strip(), "llm"
     except Exception:
-        return "AI service is temporarily unavailable. Please try again later.", "llm"
+        return (
+            "The requested answer could not be generated from the available database context. "
+            "Please try a more specific question.",
+            "llm",
+        )
 
 
 def attach_hallucination_warning(response_text, source):
@@ -881,23 +1540,44 @@ def _is_intro_course(course_name):
     return any(kw in n for kw in ["intro", "introduction", "101", "100", "fundamentals", "basic"])
 
 
+def _infer_difficulty_str(course_name):
+    """Returns 'Introductory', 'Intermediate', or 'Advanced' based on course name keywords."""
+    n = course_name.lower()
+    if any(k in n for k in ["intro", "101", "100", "fundamentals", "basic"]):
+        return "Introductory"
+    if any(k in n for k in ["20", "21", "22", "23"]):
+        return "Intermediate"
+    return "Advanced"
+
+
 def score_courses_for_student(student_id, available_courses):
     # K-019: Returns sorted list of (course_dict, score, reason)
     db = get_db()
     try:
-        enrolled_ids = {
-            r["course_id"] for r in db.execute(
-                "SELECT course_id FROM enrollments WHERE student_id = ? AND status = 'enrolled'",
+        enrolled_rows = db.execute(
+            """SELECT c.id, c.course_name
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               WHERE e.student_id = ? AND e.status = 'enrolled'""",
+            (student_id,),
+        ).fetchall()
+        enrolled_ids = {r["id"] for r in enrolled_rows}
+        enrolled_keys = {_course_identity_key(r["course_name"]) for r in enrolled_rows}
+        enrolled_codes = {_course_code(r["course_name"]) for r in enrolled_rows}
+
+        completed_rows = db.execute(
+            """SELECT c.id, c.course_name
+               FROM grades g
+               JOIN courses c ON g.course_id = c.id
+               WHERE g.student_id = ? AND g.letter_grade != 'F'""",
                 (student_id,),
-            ).fetchall()
-        }
-        # K-019: also exclude courses the student already passed (grade != F)
-        completed_ids = {
-            r["course_id"] for r in db.execute(
-                "SELECT course_id FROM grades WHERE student_id = ? AND letter_grade != 'F'",
-                (student_id,),
-            ).fetchall()
-        }
+        ).fetchall()
+        # K-019: also exclude courses the student already passed (grade != F).
+        # Use both id and normalized course identity so duplicate seed rows like
+        # "CS101" and "CS101 - Intro to Computing" do not get recommended again.
+        completed_ids = {r["id"] for r in completed_rows}
+        completed_keys = {_course_identity_key(r["course_name"]) for r in completed_rows}
+        completed_codes = {_course_code(r["course_name"]) for r in completed_rows}
         grades = db.execute(
             "SELECT numeric_value FROM grades WHERE student_id = ?", (student_id,)
         ).fetchall()
@@ -906,9 +1586,24 @@ def score_courses_for_student(student_id, available_courses):
             sum(g["numeric_value"] for g in grades) / len(grades) if grades else 2.5
         )
         scored = []
+        seen_recommendation_keys = set()
+        seen_recommendation_codes = set()
         for course in available_courses:
-            if course["id"] in enrolled_ids or course["id"] in completed_ids:
+            course_key = _course_identity_key(course["course_name"])
+            course_code = _course_code(course["course_name"])
+            if (
+                course["id"] in enrolled_ids
+                or course["id"] in completed_ids
+                or course_key in enrolled_keys
+                or course_key in completed_keys
+                or course_code in enrolled_codes
+                or course_code in completed_codes
+                or course_key in seen_recommendation_keys
+                or course_code in seen_recommendation_codes
+            ):
                 continue
+            seen_recommendation_keys.add(course_key)
+            seen_recommendation_codes.add(course_code)
             # Skip cancelled courses and full courses (belt-and-suspenders — generate_recommendations
             # already filters by status='active', but scenario toggles can change state mid-session)
             if course.get("status") == "cancelled":
@@ -948,6 +1643,18 @@ def score_courses_for_student(student_id, available_courses):
         db.close()
 
 
+def _course_code(course_name):
+    return (course_name or "").split(" - ")[0].strip().upper()
+
+
+def _course_identity_key(course_name):
+    name = (course_name or "").lower().strip()
+    if " - " in name:
+        code, title = name.split(" - ", 1)
+        return f"{code.strip()}::{title.strip()}"
+    return _course_code(name).lower()
+
+
 def generate_recommendations(student_id):
     # K-016 / L-027: Scores active courses in the current semester only.
     # Uses the most recently created semester as "current" until get_current_semester() is available.
@@ -961,9 +1668,18 @@ def generate_recommendations(student_id):
         if not sem_row:
             return []
         courses = db.execute(
-            """SELECT id, course_name, time_slot, capacity, enrolled_count
+            """SELECT id, course_name,
+                      CASE
+                        WHEN start_time IS NOT NULL AND end_time IS NOT NULL
+                          THEN time_slot || ' ' || start_time || '-' || end_time
+                        ELSE time_slot
+                      END AS time_slot,
+                      capacity, enrolled_count, status
                FROM courses
-               WHERE status = 'active' AND semester_id = ?""",
+               WHERE status = 'active' AND semester_id = ?
+               ORDER BY
+                 CASE WHEN course_name LIKE '% - %' THEN 0 ELSE 1 END,
+                 course_name""",
             (sem_row["semester_id"],),
         ).fetchall()
         scored = score_courses_for_student(student_id, [dict(c) for c in courses])
@@ -1139,95 +1855,194 @@ def register_ai_routes(app):
     import os as _os
     from datetime import datetime as _dt
 
-    # ── Query & History ───────────────────────────────────────────────────────
+    # Runtime migration: add helpful column to ai_queries if not yet present
+    _db = get_db()
+    try:
+        _db.execute("ALTER TABLE ai_queries ADD COLUMN helpful INTEGER DEFAULT NULL")
+        _db.commit()
+    except Exception:
+        pass  # column already exists; safe to ignore
+    finally:
+        _db.close()
 
+    # ── Main assistant route (ChatGPT-style) ─────────────────────────────────
+
+    @app.route('/ai/assistant')
+    def ai_assistant():
+        if 'user_id' not in session:
+            return render_template('ai/assistant.html',
+                role='visitor', username='Guest',
+                history=[], pending_flags=[],
+                active_student_name=None,
+                access_denied=False,
+            )
+        user_id  = session['user_id']
+        role     = session.get('role', 'visitor')
+        username = session.get('username', '')
+
+        eligible, _ = check_user_ai_eligibility(user_id)
+        if not eligible:
+            return render_template('ai/assistant.html',
+                role=role, username=username,
+                history=[], pending_flags=[],
+                access_denied=True,
+            ), 403
+
+        history       = get_query_history(user_id, limit=15)
+        pending_flags = get_all_flags(status_filter='pending') if role == 'registrar' else []
+        active_student_name = None
+        if role == 'registrar':
+            active_student_name = get_student_username(session.get('ai_active_student_id'))
+
+        return render_template('ai/assistant.html',
+            role=role, username=username,
+            history=history, pending_flags=pending_flags,
+            active_student_name=active_student_name,
+            access_denied=False,
+        )
+
+    # Legacy /ai/query → redirect
     @app.route('/ai/query', methods=['GET', 'POST'])
     def ai_query():
-        if 'user_id' not in session:
-            return redirect(url_for('login'))
-        user_id    = session['user_id']
-        role       = session.get('role', 'visitor')
-        result     = None
-        error      = None
-        query_text = ''
-
-        if request.method == 'POST':
-            query_text = request.form.get('query_text', '').strip()
-            result = submit_query(user_id, role, query_text)
-            if result.get('error'):
-                error  = result['error']
-                result = None
-
-        history = get_query_history(user_id, limit=10)
-
-        # Build role-specific sidebar data injected into the unified template
-        sidebar = {}
-        if role == 'student':
-            sidebar['recommendations'] = generate_recommendations(user_id)
-        elif role == 'registrar':
-            sidebar['flags'] = get_all_flags(status_filter='pending')
-        elif role == 'instructor':
-            _db = get_db()
-            try:
-                courses = _db.execute(
-                    """SELECT id, course_name, time_slot, enrolled_count, capacity
-                       FROM courses WHERE instructor_id = ? AND status = 'active'""",
-                    (user_id,),
-                ).fetchall()
-                course_list = []
-                for c in courses:
-                    students = _db.execute(
-                        """SELECT u.username FROM enrollments e
-                           JOIN users u ON e.student_id = u.id
-                           WHERE e.course_id = ? AND e.status = 'enrolled'""",
-                        (c['id'],),
-                    ).fetchall()
-                    course_list.append({
-                        'course_name':    c['course_name'],
-                        'time_slot':      c['time_slot'],
-                        'enrolled_count': c['enrolled_count'],
-                        'capacity':       c['capacity'],
-                        'students':       [s['username'] for s in students],
-                    })
-                sidebar['courses'] = course_list
-            finally:
-                _db.close()
-
-        return render_template(
-            'ai/query.html',
-            role=role, result=result, error=error,
-            history=history, sidebar=sidebar, query_text=query_text,
-        )
+        return redirect(url_for('ai_assistant'))
 
     @app.route('/ai/history')
     def ai_history():
         if 'user_id' not in session:
-            return redirect(url_for('login'))
-        return redirect(url_for('ai_query'))
+            return redirect(url_for('home'))
+        return redirect(url_for('ai_assistant'))
+
+    @app.route('/ai/query/submit', methods=['POST'])
+    def ai_query_submit():
+        from flask import jsonify
+        if 'user_id' not in session:
+            data = request.get_json(silent=True) or {}
+            query_text = data.get('query_text', request.form.get('query_text', '')).strip()
+            return jsonify(submit_public_query(query_text))
+        eligible, deny_reason = check_user_ai_eligibility(session['user_id'])
+        if not eligible:
+            return jsonify({'error': deny_reason}), 403
+        data = request.get_json(silent=True) or {}
+        query_text = data.get('query_text', request.form.get('query_text', '')).strip()
+        user_id = session['user_id']
+        role    = session.get('role', 'visitor')
+        active_student_id = None
+        if role == 'registrar':
+            mentioned_student_id = find_student_reference(query_text)
+            if mentioned_student_id:
+                session['ai_active_student_id'] = mentioned_student_id
+            active_student_id = session.get('ai_active_student_id')
+        result  = submit_query(user_id, role, query_text, active_student_id=active_student_id)
+        if role == 'registrar' and result.get('active_student_id'):
+            session['ai_active_student_id'] = result['active_student_id']
+        # Attach structured recommendation cards when applicable
+        if role == 'student' and _is_recommendation_query(query_text) and not result.get('error'):
+            raw_recs = generate_recommendations(user_id)
+            result['recommendation_cards'] = [
+                {
+                    'id':          r['course']['id'],
+                    'course_name': r['course']['course_name'],
+                    'time_slot':   r['course'].get('time_slot') or 'TBD',
+                    'reason':      r['reason'],
+                    'difficulty':  _infer_difficulty_str(r['course']['course_name']),
+                }
+                for r in raw_recs
+            ]
+        elif role == 'registrar' and session.get('ai_active_student_id') and _is_recommendation_query(query_text) and not result.get('error'):
+            raw_recs = generate_recommendations(session['ai_active_student_id'])
+            active_name = get_student_username(session['ai_active_student_id'])
+            result['active_student_name'] = active_name
+            result['recommendation_cards'] = [
+                {
+                    'id':          r['course']['id'],
+                    'course_name': r['course']['course_name'],
+                    'time_slot':   r['course'].get('time_slot') or 'TBD',
+                    'reason':      f"For {active_name}: {r['reason']}" if active_name else r['reason'],
+                    'difficulty':  _infer_difficulty_str(r['course']['course_name']),
+                }
+                for r in raw_recs
+            ]
+        return jsonify(result)
+
+    @app.route('/ai/query/<int:query_id>/feedback', methods=['POST'])
+    def ai_query_feedback(query_id):
+        from flask import jsonify
+        if 'user_id' not in session:
+            return jsonify({'error': 'Not authenticated'}), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            helpful_val = int(data.get('helpful', request.form.get('helpful', '')))
+        except (ValueError, TypeError):
+            return jsonify({'error': 'helpful must be 0 or 1'}), 400
+        if helpful_val not in (0, 1):
+            return jsonify({'error': 'helpful must be 0 or 1'}), 400
+        _db = get_db()
+        try:
+            _db.execute("BEGIN")
+            _db.execute(
+                "UPDATE ai_queries SET helpful = ? WHERE id = ? AND user_id = ?",
+                (helpful_val, query_id, session['user_id']),
+            )
+            _db.commit()
+        except Exception:
+            _db.rollback()
+            return jsonify({'error': 'DB error'}), 500
+        finally:
+            _db.close()
+        return jsonify({'ok': True, 'query_id': query_id, 'helpful': helpful_val})
 
     # ── Flagging ──────────────────────────────────────────────────────────────
+
+    @app.route('/ai/flag/<int:query_id>')
+    def ai_flag_page(query_id):
+        if 'user_id' not in session:
+            return redirect(url_for('home'))
+        _db = get_db()
+        try:
+            q = _db.execute(
+                "SELECT id, query_text, source FROM ai_queries WHERE id = ? AND user_id = ?",
+                (query_id, session['user_id']),
+            ).fetchone()
+        finally:
+            _db.close()
+        if not q:
+            return redirect(url_for('ai_assistant'))
+        return render_template('ai/flag.html',
+            query=dict(q),
+            role=session.get('role', 'visitor'),
+            username=session.get('username', ''),
+        )
 
     @app.route('/ai/query/<int:query_id>/flag', methods=['POST'])
     def ai_flag_query(query_id):
         if 'user_id' not in session:
-            return redirect(url_for('login'))
+            return redirect(url_for('home'))
         reason = request.form.get('reason', '').strip()
         if reason:
             flag_query(query_id, session['user_id'], reason)
-        return redirect(url_for('ai_query'))
+        return redirect(url_for('ai_assistant'))
 
     @app.route('/ai/flags')
     def ai_flags():
         if 'user_id' not in session or session.get('role') != 'registrar':
             return redirect(url_for('home'))
-        return redirect(url_for('ai_query'))
+        status_filter = request.args.get('status') or 'pending'
+        if status_filter not in ('pending', 'reviewed', 'all'):
+            status_filter = 'pending'
+        flags = get_all_flags(None if status_filter == 'all' else status_filter)
+        return render_template('ai/flags.html',
+            role=session.get('role', 'visitor'),
+            username=session.get('username', ''),
+            flags=flags,
+            status_filter=status_filter,
+        )
 
     @app.route('/ai/flags/<int:flag_id>/resolve', methods=['POST'])
     def ai_resolve_flag(flag_id):
         if 'user_id' not in session or session.get('role') != 'registrar':
             return redirect(url_for('home'))
         resolve_flag(flag_id, session['user_id'])
-        return redirect(url_for('ai_query'))
+        return redirect(url_for('ai_flags'))
 
     # ── K-025: Registrar CSV Export ───────────────────────────────────────────
 
@@ -1257,7 +2072,45 @@ def register_ai_routes(app):
     def ai_recommendations():
         if 'user_id' not in session or session.get('role') != 'student':
             return redirect(url_for('home'))
-        return redirect(url_for('ai_query'))
+        user_id = session['user_id']
+        recs = generate_recommendations(user_id)
+
+        db = get_db()
+        try:
+            student = db.execute(
+                "SELECT cumulative_gpa, status FROM students WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            completed = db.execute(
+                "SELECT COUNT(*) FROM grades WHERE student_id = ? AND letter_grade != 'F'",
+                (user_id,),
+            ).fetchone()[0]
+            total = db.execute(
+                "SELECT COUNT(*) FROM courses WHERE status = 'active'",
+            ).fetchone()[0]
+        finally:
+            db.close()
+
+        gpa = student["cumulative_gpa"] if student else 0.0
+        standing = "Good Standing" if gpa >= 2.0 else "Academic Probation"
+        decorated_recs = []
+        for rec in recs:
+            item = dict(rec)
+            item["difficulty"] = _infer_difficulty_str(rec["course"]["course_name"])
+            item["instructor"] = "TBD"
+            decorated_recs.append(item)
+
+        return render_template(
+            'ai/recommendations.html',
+            username=session.get('username', ''),
+            recommendations=decorated_recs,
+            profile={
+                "gpa": gpa,
+                "completed": completed,
+                "total": max(total, completed),
+                "standing": standing,
+            },
+        )
 
     @app.route('/ai/recommendations/refresh', methods=['POST'])
     def ai_recommendations_refresh():
@@ -1266,4 +2119,36 @@ def register_ai_routes(app):
         refresh_vector_db()
         recs = generate_recommendations(session['user_id'])
         save_recommendations(session['user_id'], recs)
-        return redirect(url_for('ai_query'))
+        return redirect(url_for('ai_assistant'))
+
+    @app.route('/ai/recommendations/inline')
+    def ai_recommendations_inline():
+        from flask import jsonify
+        if 'user_id' not in session or session.get('role') != 'student':
+            return jsonify({'error': 'Student access only'}), 403
+        raw_recs = generate_recommendations(session['user_id'])
+        cards = [
+            {
+                'id':          r['course']['id'],
+                'course_name': r['course']['course_name'],
+                'time_slot':   r['course'].get('time_slot') or 'TBD',
+                'reason':      r['reason'],
+                'difficulty':  _infer_difficulty_str(r['course']['course_name']),
+            }
+            for r in raw_recs
+        ]
+        return jsonify({'cards': cards})
+
+    @app.route('/ai/enroll/<int:course_id>', methods=['POST'])
+    def ai_enroll_course(course_id):
+        from flask import jsonify
+        if 'user_id' not in session:
+            return jsonify({'error': 'Student or registrar access only'}), 403
+        if session.get('role') == 'student':
+            target_student_id = session['user_id']
+        elif session.get('role') == 'registrar' and session.get('ai_active_student_id'):
+            target_student_id = session['ai_active_student_id']
+        else:
+            return jsonify({'error': 'Student access only, or select a student first as registrar'}), 403
+        msg, ok = enroll_from_ai(target_student_id, course_id)
+        return jsonify({'message': msg, 'ok': ok}), (200 if ok else 400)
