@@ -1,5 +1,14 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+import json
+import os
+
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from jinja2 import ChoiceLoader, FileSystemLoader
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from database.db import init_db, get_db
 
@@ -18,15 +27,132 @@ from modules.semester import (
     get_current_semester, get_current_period, 
     use_honor_roll_to_remove_warning, submit_gpa_justification, 
     resolve_gpa_flag, get_active_semester
-
-
 )
+
+from modules.auth import (
+    submit_application, get_applications_for_clerk_user,
+    list_pending_applications, list_all_applications,
+    approve_application, reject_application,
+    change_password,
+    suspend_user, terminate_user, reactivate_user, list_manageable_users,
+    require_role, verify_clerk_session, establish_clerk_session,
+)
+
+
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
 ])
 
 app.secret_key = 'college0secretkey'
+
+
+@app.context_processor
+def inject_clerk_config():
+    """Make the Clerk publishable key available to every template so the
+    visitor-facing pages can boot Clerk JS without a backend round-trip."""
+    return {
+        "CLERK_PUBLISHABLE_KEY": os.environ.get("CLERK_PUBLISHABLE_KEY", ""),
+    }
+
+
+# ── React shell helper ───────────────────────────────────────────────────────
+# Auth-related pages are now rendered via a single Jinja shell (_shell.html)
+# that mounts a Vite-built React bundle from static/dist/. Each route passes a
+# `page` discriminator + arbitrary JSON-serialisable data the React component
+# reads from the inline <script id="__data"> tag. Teammates' pages still use
+# their existing Jinja templates unchanged.
+
+_PAGE_TITLES = {
+    'login': 'College0 — Login',
+    'apply': 'College0 — Apply',
+    'apply_status': 'College0 — Application Status',
+    'change_password': 'College0 — Change Password',
+    'dashboard': 'College0 — Dashboard',
+    'registrar_applications': 'College0 — Applications',
+    'registrar_users': 'College0 — Users',
+    'register':          'College0 — Course Registration',
+    'instructor_courses':'College0 — My Courses',
+    'class_detail':      'College0 — Class Detail',
+    'create':            'College0 — Create Course',
+    'manage':            'College0 — Semester Management',
+    'graduation':        'College0 — Graduation Applications',
+    'reviews':           'College0 — Course Reviews',
+    'warnings':          'College0 — My Warnings',
+    'complaints':        'College0 — Complaints',
+    'taboo':             'College0 — Taboo Words',
+    'my_reviews':        'College0 — Reviews',
+    'home':              'College0 — AI-Enabled College Management',
+    'profile':           'College0 — My Profile',
+}
+
+
+def _json_default(obj):
+    """sqlite3.Row -> dict; datetime -> isoformat; everything else -> str."""
+    try:
+        return dict(obj)
+    except (TypeError, ValueError):
+        pass
+    if hasattr(obj, 'isoformat'):
+        return obj.isoformat()
+    return str(obj)
+
+
+def render_react(page, **data):
+    data.setdefault('clerk_publishable_key', os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
+    return render_template(
+        '_shell.html',
+        page=page,
+        page_title=_PAGE_TITLES.get(page, 'College0'),
+        data_json=json.dumps(data, default=_json_default),
+    )
+
+
+def wants_json():
+    """True when the request was made via the React fetch helper (so we
+    should respond with a JSON envelope) rather than a full page load."""
+    if request.headers.get('X-Requested-With') == 'fetch':
+        return True
+    accept = request.headers.get('Accept', '')
+    return 'application/json' in accept and 'text/html' not in accept
+
+
+def _rows_to_dicts(rows):
+    return [dict(r) for r in rows] if rows else []
+
+
+# Routes that a user with must_change_password=1 is still allowed to hit.
+_ALLOWED_DURING_PW_CHANGE = {
+    'change_password_page', 'change_password_submit',
+    'logout', 'static',
+}
+
+
+@app.before_request
+def enforce_password_change():
+    """UC-11: once a user is logged in with a temporary password, every
+    request must redirect to /change-password until they pick a new one.
+    This guards routes that don't use the @require_role decorator."""
+    if 'user_id' not in session:
+        return None
+    if request.endpoint in _ALLOWED_DURING_PW_CHANGE:
+        return None
+    conn = get_db()
+    row = conn.execute(
+        "SELECT must_change_password, status FROM users WHERE id = ?",
+        (session['user_id'],),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        session.clear()
+        return redirect(url_for('home'))
+    if row['status'] != 'active':
+        session.clear()
+        return redirect(url_for('home'))
+    if row['must_change_password']:
+        session['must_change_password'] = True
+        return redirect(url_for('change_password_page'))
+    return None
 
 # initialize the database when the app starts
 with app.app_context():
@@ -70,7 +196,22 @@ create_test_users()
 
 @app.route('/')
 def home():
-    return render_template('login.html')
+    conn = get_db()
+    semester = get_active_semester()
+    stats = {
+        'student_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='student'").fetchone()[0],
+        'instructor_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='instructor'").fetchone()[0],
+        'course_count': conn.execute("SELECT COUNT(*) FROM courses WHERE status='active'").fetchone()[0],
+    }
+    conn.close()
+    return render_react('home',
+                        semester=dict(semester) if semester else None,
+                        stats=stats)
+
+@app.route('/login', methods=['GET'])
+def login_page():
+    return render_react('login',
+                        clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -84,18 +225,272 @@ def login():
     ).fetchone()
     conn.close()
 
-    if user:
-        session['user_id']  = user['id']
-        session['username'] = user['username']
-        session['role']     = user['role']
-        return redirect(url_for('dashboard'))
+    def _login_error(message):
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('login', error=message)
+
+    if not user:
+        return _login_error("Invalid username or password.")
+    if user['status'] == 'suspended':
+        return _login_error("Your account is suspended. Please contact the registrar.")
+    if user['status'] == 'terminated':
+        return _login_error("Your account has been terminated. Please contact the registrar.")
+
+    session['user_id']  = user['id']
+    session['username'] = user['username']
+    session['role']     = user['role']
+
+    if user['must_change_password']:
+        session['must_change_password'] = True
+        target = url_for('change_password_page')
     else:
-        return render_template('login.html', error="Invalid username or password.")
+        session.pop('must_change_password', None)
+        target = url_for('dashboard')
+
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': target})
+    return redirect(target)
+
+@app.route('/auth/clerk-login', methods=['POST'])
+def clerk_login():
+    """Bridge a verified Clerk session into the Flask session. The React
+    login page calls this after the user signs in with the Clerk <SignIn>
+    widget, so the same identity used on /apply can open a normal app
+    session. UC-10/UC-11 still apply: if the user row has
+    must_change_password=1, we redirect to /change-password just like the
+    username/password login does."""
+    result = establish_clerk_session(request)
+    if not result.get('ok'):
+        payload = {'ok': False, 'error': result.get('error', 'Sign-in failed.')}
+        if result.get('redirect'):
+            payload['redirect'] = result['redirect']
+        return jsonify(payload), 200
+
+    user = result['user']
+    session['user_id']  = user['id']
+    session['username'] = user['username']
+    session['role']     = user['role']
+    if result['must_change_password']:
+        session['must_change_password'] = True
+    else:
+        session.pop('must_change_password', None)
+
+    return jsonify({'ok': True, 'redirect': result['redirect']})
+
 
 @app.route('/logout')
 def logout():
+    """Clear the Flask session and bounce back to /. The `?signed_out=1`
+    flag tells the React login page to also sign out of Clerk on arrival —
+    otherwise the lingering Clerk JWT would let the page's ClerkBridge
+    re-establish the Flask session immediately and the user would land
+    right back on /dashboard."""
     session.clear()
-    return redirect(url_for('home'))
+    return redirect(url_for('home') + '?signed_out=1')
+
+
+# ── APPLICATIONS (UC-07 / UC-08 / UC-11) ─────────────────────────────────────
+# Visitors authenticate with Clerk (JS) to submit an application and check
+# its status. The Clerk session is verified server-side via verify_clerk_session.
+
+@app.route('/apply', methods=['GET'])
+def apply_page():
+    return render_react('apply')
+
+
+@app.route('/apply', methods=['POST'])
+def apply_submit():
+    clerk_user_id = verify_clerk_session(request)
+    if not clerk_user_id:
+        msg = "You must sign in with Clerk before submitting an application."
+        if wants_json():
+            return jsonify({'ok': False, 'error': msg}), 200
+        return render_react('apply', error=msg)
+
+    first_name = request.form.get('first_name', '')
+    last_name = request.form.get('last_name', '')
+    email = request.form.get('email', '')
+    role_applied = request.form.get('role_applied', '')
+
+    ok, message = submit_application(
+        first_name, last_name, email, role_applied, clerk_user_id
+    )
+    if not ok:
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('apply', error=message,
+                            first_name=first_name, last_name=last_name,
+                            email=email, role_applied=role_applied)
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': url_for('apply_status')})
+    return redirect(url_for('apply_status'))
+
+
+@app.route('/apply/status')
+def apply_status():
+    clerk_user_id = verify_clerk_session(request)
+    applications = _rows_to_dicts(
+        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
+    )
+    return render_react('apply_status',
+                        applications=applications,
+                        signed_in=bool(clerk_user_id))
+
+
+@app.route('/apply/status.json')
+def apply_status_json():
+    """JSON variant used by the React ApplyStatus page when the initial HTML
+    response wasn't able to verify the Clerk session server-side (e.g. the
+    `__session` cookie wasn't sent on the initial GET)."""
+    clerk_user_id = verify_clerk_session(request)
+    applications = _rows_to_dicts(
+        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
+    )
+    return jsonify({
+        'signed_in': bool(clerk_user_id),
+        'applications': applications,
+    })
+
+
+# ── REGISTRAR: REVIEW APPLICATIONS (UC-09 / UC-10) ───────────────────────────
+
+def _applications_payload(issued=None):
+    pending = _rows_to_dicts(list_pending_applications())
+    reviewed = [dict(a) for a in list_all_applications() if a['status'] != 'pending']
+    return {
+        'pending': pending,
+        'reviewed': reviewed,
+        'issued': issued,
+    }
+
+
+@app.route('/registrar/applications')
+@require_role('registrar')
+def registrar_applications():
+    issued = session.pop('issued_credentials', None)
+    return render_react('registrar_applications',
+                        role=session['role'],
+                        username=session['username'],
+                        **_applications_payload(issued))
+
+
+@app.route('/registrar/applications/<int:application_id>/approve', methods=['POST'])
+@require_role('registrar')
+def registrar_approve_application(application_id):
+    result = approve_application(application_id)
+    if result.get('ok'):
+        issued = {
+            'user_id': result['user_id'],
+            'username': result['username'],
+            'temp_password': result['temp_password'],
+            'role': result['role'],
+            'email': result['email'],
+        }
+    else:
+        issued = {'error': result.get('message', 'Approval failed.')}
+
+    if wants_json():
+        return jsonify({'ok': bool(result.get('ok')),
+                        'data': {'issued': issued, **_applications_payload(issued)}})
+
+    session['issued_credentials'] = issued
+    return redirect(url_for('registrar_applications'))
+
+
+@app.route('/registrar/applications/<int:application_id>/reject', methods=['POST'])
+@require_role('registrar')
+def registrar_reject_application(application_id):
+    ok, message = reject_application(application_id)
+    issued = ({'error': message} if not ok else {'rejected': True, 'message': message})
+
+    if wants_json():
+        return jsonify({'ok': ok,
+                        'data': {'issued': issued, **_applications_payload(issued)}})
+
+    session['issued_credentials'] = issued
+    return redirect(url_for('registrar_applications'))
+
+
+# ── REGISTRAR: MANAGE USERS (UC-13) ──────────────────────────────────────────
+
+@app.route('/registrar/users')
+@require_role('registrar')
+def registrar_users():
+    users = _rows_to_dicts(list_manageable_users())
+    return render_react('registrar_users',
+                        users=users,
+                        message=session.pop('user_action_message', None),
+                        role=session['role'],
+                        username=session['username'])
+
+
+@app.route('/registrar/users/<int:user_id>/<action>', methods=['POST'])
+@require_role('registrar')
+def registrar_user_action(user_id, action):
+    if action == 'suspend':
+        ok, message = suspend_user(user_id)
+    elif action == 'terminate':
+        ok, message = terminate_user(user_id)
+    elif action == 'reactivate':
+        ok, message = reactivate_user(user_id)
+    else:
+        ok, message = False, "Unknown action."
+
+    if wants_json():
+        return jsonify({
+            'ok': ok,
+            'message': message,
+            'data': {'users': _rows_to_dicts(list_manageable_users())},
+        })
+
+    session['user_action_message'] = message
+    return redirect(url_for('registrar_users'))
+
+
+# ── CHANGE PASSWORD (UC-11) ──────────────────────────────────────────────────
+
+@app.route('/change-password', methods=['GET'])
+def change_password_page():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    return render_react('change_password',
+                        must_change=session.get('must_change_password', False),
+                        username=session['username'],
+                        role=session.get('role'))
+
+
+@app.route('/change-password', methods=['POST'])
+def change_password_submit():
+    if 'user_id' not in session:
+        if wants_json():
+            return jsonify({'ok': False, 'error': 'Not signed in.'}), 401
+        return redirect(url_for('home'))
+
+    old_password = request.form.get('old_password', '')
+    new_password = request.form.get('new_password', '')
+    confirm = request.form.get('confirm_password', '')
+
+    def _pw_error(message):
+        if wants_json():
+            return jsonify({'ok': False, 'error': message}), 200
+        return render_react('change_password',
+                            error=message,
+                            must_change=session.get('must_change_password', False),
+                            username=session['username'],
+                            role=session.get('role'))
+
+    if new_password != confirm:
+        return _pw_error("New password and confirmation do not match.")
+
+    ok, message = change_password(session['user_id'], old_password, new_password)
+    if not ok:
+        return _pw_error(message)
+
+    session.pop('must_change_password', None)
+    if wants_json():
+        return jsonify({'ok': True, 'redirect': url_for('dashboard')})
+    return redirect(url_for('dashboard'))
 
 
 # ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -133,13 +528,35 @@ def dashboard():
             (session['user_id'],)
         ).fetchone()
     conn.close()
-    return render_template('dashboard.html',
-                           semester=semester,
-                           student_data=student_data,
-                           grades=grades,
-                           grad_app=grad_app,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('dashboard',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        student_data=dict(student_data) if student_data else None,
+                        grades=_rows_to_dicts(grades))
+    
+@app.route('/profile')
+def profile():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],)).fetchone()
+    student = None
+    if session['role'] == 'student':
+        student = conn.execute("SELECT * FROM students WHERE id = ?", (session['user_id'],)).fetchone()
+    conn.close()
+    
+    # show tutorial only once
+    show_tutorial = session.get('role') == 'student' and not session.get('tutorial_done')
+    if show_tutorial:
+        session['tutorial_done'] = True
+    
+    return render_react('profile',
+                        username=session['username'],
+                        role=session['role'],
+                        user=dict(user) if user else None,
+                        student=dict(student) if student else None,
+                        show_tutorial=show_tutorial)
     
     
 #start of Tanzina's code
@@ -149,7 +566,6 @@ def dashboard():
 def course_registration():
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
     conn = get_db()
     semester = get_active_semester()
     special_registration = False
@@ -199,16 +615,16 @@ def course_registration():
         (session['user_id'], semester['id'])
     ).fetchall()
     conn.close()
+    return render_react('register',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        courses=_rows_to_dicts(courses),
+                        enrolled=_rows_to_dicts(enrolled),
+                        cancelled_courses=_rows_to_dicts(cancelled_courses),
+                        waitlisted=_rows_to_dicts(waitlisted),
+                        special_registration=bool(special_registration))
     
-    return render_template('courses/register.html',
-                           courses=courses,
-                           semester=semester,
-                           enrolled=enrolled,
-                           cancelled_courses=cancelled_courses,                           
-                           role=session['role'],
-                           username=session['username'],
-                           waitlisted=waitlisted,
-                           special_registration=special_registration)
 @app.route('/instructor/courses')
 def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -219,8 +635,7 @@ def instructor_courses():
         """SELECT c.*, s.name as semester_name, s.current_period,
            (SELECT COUNT(*) FROM waitlist w 
             WHERE w.course_id = c.id AND w.status = 'pending') as waitlist_count
-           FROM courses c
-           JOIN semesters s ON c.semester_id = s.id
+           FROM courses c JOIN semesters s ON c.semester_id = s.id
            WHERE c.instructor_id = ? AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
@@ -234,75 +649,57 @@ def instructor_courses():
             ).fetchone()['count']
             enrolled_counts[course['id']] = count
     conn.close()
-    return render_template('courses/instructor_courses.html',
-                           courses=courses,
-                           semester=semester,
-                           enrolled_counts=enrolled_counts,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('instructor_courses',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        courses=_rows_to_dicts(courses))
 
 @app.route('/courses/register/<int:course_id>', methods=['POST'])
 def register_for_course(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
     message = register_student(session['user_id'], course_id)
-    
     conn = get_db()
     semester = get_active_semester()
     special_registration = False
     if session['role'] == 'student':
-        sr = conn.execute(
-            "SELECT special_registration FROM students WHERE id = ?",
-            (session['user_id'],)
-        ).fetchone()
+        sr = conn.execute("SELECT special_registration FROM students WHERE id = ?", (session['user_id'],)).fetchone()
         special_registration = sr and sr['special_registration'] == 1
     courses = conn.execute(
         """SELECT c.*, u.username as instructor_name,
            c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
-           FROM courses c
-           LEFT JOIN users u ON c.instructor_id = u.id
-           WHERE c.status = 'active' AND c.semester_id = ?""",
-        (semester['id'],)
+           FROM courses c LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE c.status = 'active' AND c.semester_id = ?""", (semester['id'],)
     ).fetchall()
     enrolled = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
-           FROM enrollments e
-           JOIN courses c ON e.course_id = c.id
-           LEFT JOIN users u ON c.instructor_id = u.id
-           WHERE e.student_id = ? AND e.status = 'enrolled'
-           AND c.semester_id = ?""",
+        """SELECT c.*, u.username as instructor_name FROM enrollments e
+           JOIN courses c ON e.course_id = c.id LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE e.student_id = ? AND e.status = 'enrolled' AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
     cancelled_courses = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
-           FROM enrollments e
-           JOIN courses c ON e.course_id = c.id
-           LEFT JOIN users u ON c.instructor_id = u.id
-           WHERE e.student_id = ? AND e.status = 'cancelled'
-           AND c.semester_id = ?""",
+        """SELECT c.*, u.username as instructor_name FROM enrollments e
+           JOIN courses c ON e.course_id = c.id LEFT JOIN users u ON c.instructor_id = u.id
+           WHERE e.student_id = ? AND e.status = 'cancelled' AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
     waitlisted = conn.execute(
-        """SELECT w.*, c.course_name, c.time_slot
-           FROM waitlist w
+        """SELECT w.*, c.course_name, c.time_slot FROM waitlist w
            JOIN courses c ON w.course_id = c.id
-           WHERE w.student_id = ?
-           ORDER BY w.course_id""",
-        (session['user_id'],)
+           WHERE w.student_id = ? ORDER BY w.course_id""", (session['user_id'],)
     ).fetchall()
     conn.close()
-    
-    return render_template('courses/register.html',
-                           courses=courses,
-                           semester=semester,
-                           enrolled=enrolled,
-                           cancelled_courses=cancelled_courses,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message,
-                           waitlisted=waitlisted,
-                           special_registration=special_registration)
+    return render_react('register',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        courses=_rows_to_dicts(courses),
+                        enrolled=_rows_to_dicts(enrolled),
+                        cancelled_courses=_rows_to_dicts(cancelled_courses),
+                        waitlisted=_rows_to_dicts(waitlisted),
+                        special_registration=bool(special_registration),
+                        message=message)
 
 @app.route('/courses/drop/<int:course_id>', methods=['POST'])
 def drop_course(course_id):
@@ -330,10 +727,10 @@ def semester_management():
     semester = get_active_semester()
     conn.close()
     print(f"DEBUG semester_management: id={semester['id']} name={semester['name']}")  # ADD THIS
-    return render_template('semester/manage.html',
-                           semester=semester,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('manage',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None)
 
 @app.route('/semester/advance', methods=['POST'])
 def advance_semester():
@@ -347,11 +744,11 @@ def advance_semester():
     conn = get_db()
     semester = get_active_semester()
     conn.close()
-    return render_template('semester/manage.html',
-                           semester=semester,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message)
+    return render_react('manage',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        message=message)
 
 @app.route('/semester/retreat', methods=['POST'])
 def retreat_semester():
@@ -390,11 +787,11 @@ def retreat_semester():
     
     semester = get_active_semester()
     conn.close()
-    return render_template('semester/manage.html',
-                           semester=semester,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message)
+    return render_react('manage',
+                        username=session['username'],
+                        role=session['role'],
+                        semester=dict(semester) if semester else None,
+                        message=message)
 
 # ── CREATE COURSE (registrar) ─────────────────────────────────────────────────
 
@@ -413,13 +810,13 @@ def create_course_page():
         (current_semester['id'],)
     ).fetchall()
     conn.close()
-    return render_template('courses/create.html',
-                           instructors=instructors,
-                           semesters=semesters,
-                           semester=current_semester,
-                           current_courses=current_courses,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('create',
+                        username=session['username'],
+                        role=session['role'],
+                        instructors=_rows_to_dicts(instructors),
+                        semesters=_rows_to_dicts(semesters),
+                        semester=dict(current_semester) if current_semester else None,
+                        current_courses=_rows_to_dicts(current_courses))
 
 @app.route('/courses/create', methods=['POST'])
 def create_course_route():
@@ -433,32 +830,27 @@ def create_course_route():
     end_time = request.form['end_time']
     semester_id = int(request.form['semester_id'])
     capacity = int(request.form['capacity'])
-    
-    # Build time_slot display string
     day_labels = {'1': 'Mon/Wed', '3': 'Tue/Thu', '4': 'Wed/Fri', '5': 'Fri'}
     day_label = day_labels.get(request.form['day_of_week'], 'Mon/Wed')
     time_slot = f"{day_label} {start_time}-{end_time}"
-    
     message = create_course(semester_id, name, instructor_id, time_slot, day_of_week, start_time, end_time, capacity)
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
     current_semester = get_active_semester()
     current_courses = conn.execute(
-        """SELECT c.*, u.username as instructor_name
-           FROM courses c JOIN users u ON c.instructor_id = u.id
-           WHERE c.semester_id = ?""",
+        "SELECT c.*, u.username as instructor_name FROM courses c JOIN users u ON c.instructor_id = u.id WHERE c.semester_id = ?",
         (current_semester['id'],)
     ).fetchall()
     conn.close()
-    return render_template('courses/create.html',
-                           instructors=instructors,
-                           semesters=semesters,
-                           semester=current_semester,
-                           current_courses=current_courses,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message)
+    return render_react('create',
+                        username=session['username'],
+                        role=session['role'],
+                        instructors=_rows_to_dicts(instructors),
+                        semesters=_rows_to_dicts(semesters),
+                        semester=dict(current_semester) if current_semester else None,
+                        current_courses=_rows_to_dicts(current_courses),
+                        message=message)
 @app.route('/courses/delete/<int:course_id>', methods=['POST'])
 def delete_course(course_id):
     if 'user_id' not in session or session['role'] != 'registrar':
@@ -496,10 +888,10 @@ def graduation_resolve_page():
            WHERE ga.status = 'pending'"""
     ).fetchall()
     conn.close()
-    return render_template('semester/graduation.html',
-                           applications=applications,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('graduation',
+                        username=session['username'],
+                        role=session['role'],
+                        applications=_rows_to_dicts(applications))
 
 @app.route('/graduation/resolve/<int:student_id>', methods=['POST'])
 def graduation_resolve_route(student_id):
@@ -525,7 +917,6 @@ def graduation_resolve_route(student_id):
 def class_detail(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
     conn = get_db()
     course = conn.execute(
         "SELECT * FROM courses WHERE id = ?", (course_id,)
@@ -540,34 +931,28 @@ def class_detail(course_id):
     
     enrolled = conn.execute(
         """SELECT u.id, u.username, g.letter_grade 
-           FROM enrollments e
-           JOIN users u ON e.student_id = u.id
+           FROM enrollments e JOIN users u ON e.student_id = u.id
            LEFT JOIN grades g ON g.student_id = u.id AND g.course_id = ?
            WHERE e.course_id = ? AND e.status = 'enrolled'""",
         (course_id, course_id)
     ).fetchall()
-    
     waitlist = conn.execute(
         """SELECT u.id, u.username, w.position
-           FROM waitlist w
-           JOIN users u ON w.student_id = u.id
-           WHERE w.course_id = ?
-           ORDER BY w.position""",
+           FROM waitlist w JOIN users u ON w.student_id = u.id
+           WHERE w.course_id = ? ORDER BY w.position""",
         (course_id,)
     ).fetchall()
-    
     semester = conn.execute(
         "SELECT * FROM semesters WHERE id = ?", (course['semester_id'],)
     ).fetchone()
     conn.close()
-    
-    return render_template('courses/class_detail.html',
-                           course=course,
-                           enrolled=enrolled,
-                           waitlist=waitlist,
-                           semester=semester,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('class_detail',
+                        username=session['username'],
+                        role=session['role'],
+                        course=dict(course) if course else None,
+                        enrolled=_rows_to_dicts(enrolled),
+                        waitlist=_rows_to_dicts(waitlist),
+                        semester=dict(semester) if semester else None)
 
 
 @app.route('/courses/<int:course_id>/grade', methods=['POST'])
@@ -680,15 +1065,11 @@ def resolve_gpa_flag_route(flag_id):
 # ── REVIEWS ───────────────────────────────────────────────────────────────────
 @app.route('/reviews')
 def my_reviews_page():
-    """Landing page — student picks which enrolled course to review."""
     if 'user_id' not in session:
         return redirect(url_for('home'))
- 
     conn = get_db()
- 
     if session['role'] == 'student':
-        # All courses student has ever been enrolled in (any status)
-        enrolled_courses = conn.execute(
+        courses = conn.execute(
             """SELECT DISTINCT c.id, c.course_name, c.time_slot,
                       e.grade, e.status as enrollment_status,
                       s.name as semester_name,
@@ -702,13 +1083,11 @@ def my_reviews_page():
             (session['user_id'],)
         ).fetchall()
         conn.close()
-        return render_template('conduct/my_reviews.html',
-                               courses=enrolled_courses,
-                               role=session['role'],
-                               username=session['username'])
- 
+        return render_react('my_reviews',
+                            username=session['username'],
+                            role=session['role'],
+                            courses=_rows_to_dicts(courses))
     else:
-        # Instructors and registrar see all courses with avg ratings
         courses = conn.execute(
             """SELECT c.id, c.course_name, c.time_slot,
                       s.name as semester_name,
@@ -721,10 +1100,10 @@ def my_reviews_page():
                ORDER BY s.id DESC, c.course_name"""
         ).fetchall()
         conn.close()
-        return render_template('conduct/my_reviews.html',
-                               courses=courses,
-                               role=session['role'],
-                               username=session['username'])
+        return render_react('my_reviews',
+                            username=session['username'],
+                            role=session['role'],
+                            courses=_rows_to_dicts(courses))
 
 @app.route('/reviews/<int:course_id>')
 def view_reviews(course_id):
@@ -749,16 +1128,15 @@ def view_reviews(course_id):
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)
-    return render_template('conduct/reviews.html',
-                           reviews=reviews,
-                           course=course,
-                           course_id=course_id,
-                           avg_rating=avg_rating,
-                           role=session['role'],
-                           username=session['username'],
-                           was_enrolled=was_enrolled,
-                           already_reviewed=already_reviewed)
- 
+    return render_react('reviews',
+                        username=session['username'],
+                        role=session['role'],
+                        course_id=course_id,
+                        course=dict(course) if course else None,
+                        reviews=_rows_to_dicts(reviews),
+                        avg_rating=avg_rating)
+
+
 @app.route('/reviews/submit/<int:course_id>', methods=['POST'])
 def submit_review_route(course_id):
     if 'user_id' not in session:
@@ -766,22 +1144,21 @@ def submit_review_route(course_id):
     star_rating = int(request.form['star_rating'])
     review_text = request.form.get('review_text', '').strip()
     result = submit_review(session['user_id'], course_id, star_rating, review_text)
-    # result format: "status:message"
     status, message = result.split(':', 1)
     conn = get_db()
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)
-    return render_template('conduct/reviews.html',
-                           reviews=reviews,
-                           course=course,
-                           course_id=course_id,
-                           avg_rating=avg_rating,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message,
-                           message_type=status)
+    return render_react('reviews',
+                        username=session['username'],
+                        role=session['role'],
+                        course_id=course_id,
+                        course=dict(course) if course else None,
+                        reviews=_rows_to_dicts(reviews),
+                        avg_rating=avg_rating,
+                        message=message,
+                        message_type=status)
 
 
 # ── WARNINGS ──────────────────────────────────────────────────────────────────
@@ -792,11 +1169,11 @@ def view_warnings():
         return redirect(url_for('home'))
     warnings = get_user_warnings(session['user_id'])
     count = get_warning_count(session['user_id'])
-    return render_template('conduct/warnings.html',
-                           warnings=warnings,
-                           count=count,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('warnings',
+                        username=session['username'],
+                        role=session['role'],
+                        warnings=_rows_to_dicts(warnings),
+                        count=count)
 
 
 # ── COMPLAINTS ────────────────────────────────────────────────────────────────
@@ -805,15 +1182,11 @@ def view_warnings():
 def view_complaints():
     if 'user_id' not in session:
         return redirect(url_for('home'))
- 
     conn = get_db()
-    # load all users for dropdown (so students/instructors can pick by name, not ID)
     all_users = conn.execute(
         "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
     ).fetchall()
- 
     if session['role'] == 'instructor':
-        # instructors see their own students for their complaint form
         my_students = conn.execute(
             """SELECT DISTINCT u.id, u.username FROM users u
                JOIN enrollments e ON u.id = e.student_id
@@ -822,60 +1195,52 @@ def view_complaints():
             (session['user_id'],)
         ).fetchall()
         conn.close()
-        return render_template('conduct/complaints.html',
-                               complaints=[],
-                               role=session['role'],
-                               username=session['username'],
-                               all_users=all_users,
-                               my_students=my_students)
- 
+        return render_react('complaints',
+                            username=session['username'],
+                            role=session['role'],
+                            complaints=[],
+                            all_users=_rows_to_dicts(all_users),
+                            my_students=_rows_to_dicts(my_students))
     if session['role'] == 'registrar':
         complaints = get_pending_complaints()
         conn.close()
-        return render_template('conduct/complaints.html',
-                               complaints=complaints,
-                               role='registrar',
-                               username=session['username'],
-                               all_users=[])
- 
+        return render_react('complaints',
+                            username=session['username'],
+                            role='registrar',
+                            complaints=_rows_to_dicts(complaints),
+                            all_users=[])
     conn.close()
-    # student view
-    return render_template('conduct/complaints.html',
-                           complaints=[],
-                           role=session['role'],
-                           username=session['username'],
-                           all_users=all_users,
-                           my_students=[])
- 
- 
+    return render_react('complaints',
+                        username=session['username'],
+                        role=session['role'],
+                        complaints=[],
+                        all_users=_rows_to_dicts(all_users),
+                        my_students=[])
+
 @app.route('/complaints/file/student', methods=['POST'])
 def file_student_complaint_route():
-    """J-001: student files complaint against anyone"""
     if 'user_id' not in session or session['role'] not in ('student', 'instructor'):
         return redirect(url_for('home'))
     filed_against = int(request.form['filed_against'])
     description = request.form.get('description', '').strip()
     result = file_student_complaint(session['user_id'], filed_against, description)
     status, message = result.split(':', 1)
- 
     conn = get_db()
     all_users = conn.execute(
         "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
     ).fetchall()
     conn.close()
-    return render_template('conduct/complaints.html',
-                           complaints=[],
-                           role=session['role'],
-                           username=session['username'],
-                           all_users=all_users,
-                           my_students=[],
-                           message=message,
-                           message_type=status)
- 
- 
+    return render_react('complaints',
+                        username=session['username'],
+                        role=session['role'],
+                        complaints=[],
+                        all_users=_rows_to_dicts(all_users),
+                        my_students=[],
+                        message=message,
+                        message_type=status)
+
 @app.route('/complaints/file/instructor', methods=['POST'])
 def file_instructor_complaint_route():
-    """J-012: instructor files complaint against a student with requested action"""
     if 'user_id' not in session or session['role'] != 'instructor':
         return redirect(url_for('home'))
     student_id = int(request.form['student_id'])
@@ -883,7 +1248,6 @@ def file_instructor_complaint_route():
     requested_action = request.form.get('requested_action', '')
     result = file_instructor_complaint(session['user_id'], student_id, description, requested_action)
     status, message = result.split(':', 1)
- 
     conn = get_db()
     my_students = conn.execute(
         """SELECT DISTINCT u.id, u.username FROM users u
@@ -896,19 +1260,17 @@ def file_instructor_complaint_route():
         "SELECT id, username, role FROM users WHERE role IN ('student', 'instructor') ORDER BY username"
     ).fetchall()
     conn.close()
-    return render_template('conduct/complaints.html',
-                           complaints=[],
-                           role=session['role'],
-                           username=session['username'],
-                           all_users=all_users,
-                           my_students=my_students,
-                           message=message,
-                           message_type=status)
- 
- 
+    return render_react('complaints',
+                        username=session['username'],
+                        role=session['role'],
+                        complaints=[],
+                        all_users=_rows_to_dicts(all_users),
+                        my_students=_rows_to_dicts(my_students),
+                        message=message,
+                        message_type=status)
+
 @app.route('/complaints/resolve/student/<int:complaint_id>', methods=['POST'])
 def resolve_student_complaint_route(complaint_id):
-    """J-008/J-009: registrar resolves a student-filed complaint"""
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     warn_user_id = int(request.form['warn_user_id'])
@@ -916,18 +1278,16 @@ def resolve_student_complaint_route(complaint_id):
     result = resolve_student_complaint(complaint_id, warn_user_id, resolution_text)
     status, message = result.split(':', 1)
     complaints = get_pending_complaints()
-    return render_template('conduct/complaints.html',
-                           complaints=complaints,
-                           role='registrar',
-                           username=session['username'],
-                           all_users=[],
-                           message=message,
-                           message_type=status)
- 
- 
+    return render_react('complaints',
+                        username=session['username'],
+                        role='registrar',
+                        complaints=_rows_to_dicts(complaints),
+                        all_users=[],
+                        message=message,
+                        message_type=status)
+
 @app.route('/complaints/resolve/instructor/<int:complaint_id>', methods=['POST'])
 def resolve_instructor_complaint_route(complaint_id):
-    """J-015: registrar must accept or reject — no silent dismissal"""
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     decision = request.form.get('decision', '')
@@ -935,13 +1295,13 @@ def resolve_instructor_complaint_route(complaint_id):
     result = resolve_instructor_complaint(complaint_id, decision, resolution_text)
     status, message = result.split(':', 1)
     complaints = get_pending_complaints()
-    return render_template('conduct/complaints.html',
-                           complaints=complaints,
-                           role='registrar',
-                           username=session['username'],
-                           all_users=[],
-                           message=message,
-                           message_type=status)
+    return render_react('complaints',
+                        username=session['username'],
+                        role='registrar',
+                        complaints=_rows_to_dicts(complaints),
+                        all_users=[],
+                        message=message,
+                        message_type=status)
 
 
 # ── TABOO WORDS (registrar only) ──────────────────────────────────────────────
@@ -951,11 +1311,11 @@ def manage_taboo():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     words = get_taboo_words()
-    return render_template('conduct/taboo.html',
-                           words=words,
-                           role=session['role'],
-                           username=session['username'])
- 
+    return render_react('taboo',
+                        username=session['username'],
+                        role=session['role'],
+                        words=words)
+
 @app.route('/taboo/add', methods=['POST'])
 def add_taboo():
     if 'user_id' not in session or session['role'] != 'registrar':
@@ -963,24 +1323,19 @@ def add_taboo():
     word = request.form.get('word', '').strip()
     success = add_taboo_word(word)
     words = get_taboo_words()
-    message = None
-    message_type = None
     if not word:
-        message = "Word cannot be empty."
-        message_type = "error"
+        message, message_type = "Word cannot be empty.", "error"
     elif not success:
-        message = f'"{word}" is already in the taboo list.'
-        message_type = "warning"
+        message, message_type = f'"{word}" is already in the taboo list.', "warning"
     else:
-        message = f'"{word}" added to taboo list.'
-        message_type = "success"
-    return render_template('conduct/taboo.html',
-                           words=words,
-                           role=session['role'],
-                           username=session['username'],
-                           message=message,
-                           message_type=message_type)
- 
+        message, message_type = f'"{word}" added to taboo list.', "success"
+    return render_react('taboo',
+                        username=session['username'],
+                        role=session['role'],
+                        words=words,
+                        message=message,
+                        message_type=message_type)
+
 @app.route('/taboo/remove/<word>')
 def remove_taboo(word):
     if 'user_id' not in session or session['role'] != 'registrar':

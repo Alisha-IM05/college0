@@ -19,14 +19,52 @@ cd college0
 
 ### Step 2 — Install dependencies
 ```bash
-pip install flask
+pip install -r requirements.txt
 ```
+
+The auth-related pages (login, apply, apply/status, change-password, registrar
+applications + users, dashboard) are a Vite-built React app served as a static
+bundle by Flask. Build it once before running the server:
+```bash
+cd frontend
+npm install
+npm run build      # writes static/dist/assets/{main.js,main.css}
+cd ..
+```
+Re-run `npm run build` whenever a file under `frontend/src/` changes. Teammates'
+pages (`courses/`, `conduct/`, `semester/`, `ai/`) are still rendered server-side
+with Jinja and require no frontend build.
+
+> **Auth deep dive:** see [AUTH.md](AUTH.md) for the full architecture,
+> use-case map (UC-07 through UC-13), data-flow diagrams, API contract,
+> and troubleshooting for the Clerk + Flask-session bridge.
+
+### Step 2b — Configure Clerk (for visitor sign-up / status check)
+Create a `.env` file at the repo root with your Clerk keys (already gitignored):
+```bash
+CLERK_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+CLERK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Optional: comma-separated list of allowed origins for the Clerk session JWT
+# CLERK_AUTHORIZED_PARTIES=http://localhost:5000,http://127.0.0.1:5000
+```
+The Clerk publishable key is auto-exposed to the visitor pages (`/apply`,
+`/apply/status`); the secret key is used server-side to verify Clerk session
+tokens. If neither is set, the app still boots — only the visitor-facing
+Clerk pages will display a configuration notice.
 
 ### Step 3 — Set up the database
 ```bash
 python3 database/db.py
 ```
 This creates the SQLite database file with all the tables.
+
+> **Note:** If you already have a `database/college0.db` from before the auth/applications work
+> was merged, delete it once so the new `users.must_change_password`, `users.clerk_user_id`, and
+> `applications.clerk_user_id` columns are picked up (SQLite's `CREATE TABLE IF NOT EXISTS` won't
+> add columns to an existing table):
+> ```bash
+> rm database/college0.db && python database/db.py
+> ```
 
 ### Step 4 — Run the website
 ```bash

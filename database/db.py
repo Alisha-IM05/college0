@@ -160,7 +160,50 @@ def seed_data():
             (uid('henry'), cs999)
         )
 
+# ── DEMO STUDENT ENROLLMENTS & GRADES ────────────────────────────────────
+    demo1_id = uid('demo_student1')
+    demo2_id = uid('demo_student2')
 
+    demo_enrollments = [
+        ('demo_student1', 'CS101 - Intro to Computing'),
+        ('demo_student1', 'CS201 - Data Structures'),
+        ('demo_student1', 'MATH101 - Calculus I'),
+        ('demo_student1', 'ENG101 - English Comp'),
+        ('demo_student2', 'CS201 - Data Structures'),
+        ('demo_student2', 'BUS101 - Business Writing'),
+        ('demo_student2', 'PHYS201 - Physics II'),
+        ('demo_student2', 'ENG101 - English Comp'),
+    ]
+
+    for username, course_name in demo_enrollments:
+        student_id = uid(username)
+        course_id  = cid_spring(course_name)
+        if student_id and course_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+                (student_id, course_id)
+            )
+
+    grade_seeds = [
+        (demo1_id, cid_spring('CS101 - Intro to Computing'), 'A',  4.0),
+        (demo1_id, cid_spring('CS201 - Data Structures'),    'B+', 3.3),
+        (demo1_id, cid_spring('MATH101 - Calculus I'),       'A-', 3.7),
+        (demo1_id, cid_spring('ENG101 - English Comp'),      'B',  3.0),
+        (demo2_id, cid_spring('CS201 - Data Structures'),    'B',  3.0),
+        (demo2_id, cid_spring('BUS101 - Business Writing'),  'A',  4.0),
+        (demo2_id, cid_spring('PHYS201 - Physics II'),       'C+', 2.3),
+        (demo2_id, cid_spring('ENG101 - English Comp'),      'B-', 2.7),
+    ]
+
+    for student_id, course_id, letter, numeric in grade_seeds:
+        if student_id and course_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO grades (student_id, course_id, letter_grade, numeric_value) VALUES (?, ?, ?, ?)",
+                (student_id, course_id, letter, numeric)
+            )
+
+    conn.execute("UPDATE students SET semester_gpa=3.5, cumulative_gpa=3.5, credits_earned=4 WHERE id=?", (demo1_id,))
+    conn.execute("UPDATE students SET semester_gpa=3.0, cumulative_gpa=3.0, credits_earned=4 WHERE id=?", (demo2_id,))
 
     # ── TABOO WORDS ───────────────────────────────────────────────────────────
     for word in ['hate', 'stupid', 'idiot', 'terrible', 'awful']:
