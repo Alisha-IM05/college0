@@ -17,7 +17,8 @@ from modules.semester import (
     apply_for_graduation, resolve_graduation,
     get_current_semester, get_current_period, 
     use_honor_roll_to_remove_warning, submit_gpa_justification, 
-    resolve_gpa_flag
+    resolve_gpa_flag, get_active_semester
+
 
 )
 app = Flask(__name__)
@@ -104,9 +105,10 @@ def dashboard():
     if 'user_id' not in session:
         return redirect(url_for('home'))
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     student_data = None
     grades = []
+    grad_app = None 
     if session['role'] == 'student':
         student_data = conn.execute(
             """SELECT u.*, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
@@ -124,11 +126,18 @@ def dashboard():
                ORDER BY s.id DESC""",
             (session['user_id'],)
         ).fetchall()
+        grad_app = conn.execute(
+            """SELECT * FROM graduation_applications
+            WHERE student_id = ?
+            ORDER BY id DESC LIMIT 1""",
+            (session['user_id'],)
+        ).fetchone()
     conn.close()
     return render_template('dashboard.html',
                            semester=semester,
                            student_data=student_data,
                            grades=grades,
+                           grad_app=grad_app,
                            role=session['role'],
                            username=session['username'])
     
@@ -142,7 +151,7 @@ def course_registration():
         return redirect(url_for('home'))
     
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     special_registration = False
     if session['role'] == 'student':
         sr = conn.execute(
@@ -205,7 +214,7 @@ def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
         return redirect(url_for('home'))
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     courses = conn.execute(
         """SELECT c.*, s.name as semester_name, s.current_period,
            (SELECT COUNT(*) FROM waitlist w 
@@ -215,10 +224,20 @@ def instructor_courses():
            WHERE c.instructor_id = ? AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    enrolled_counts = {}
+    if semester and semester['current_period'] == 'grading':
+        for course in courses:
+            count = conn.execute(
+                """SELECT COUNT(*) as count FROM grades
+                WHERE course_id = ?""",
+                (course['id'],)
+            ).fetchone()['count']
+            enrolled_counts[course['id']] = count
     conn.close()
     return render_template('courses/instructor_courses.html',
                            courses=courses,
                            semester=semester,
+                           enrolled_counts=enrolled_counts,
                            role=session['role'],
                            username=session['username'])
 
@@ -230,7 +249,7 @@ def register_for_course(course_id):
     message = register_student(session['user_id'], course_id)
     
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     special_registration = False
     if session['role'] == 'student':
         sr = conn.execute(
@@ -308,8 +327,9 @@ def semester_management():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     conn.close()
+    print(f"DEBUG semester_management: id={semester['id']} name={semester['name']}")  # ADD THIS
     return render_template('semester/manage.html',
                            semester=semester,
                            role=session['role'],
@@ -321,11 +341,11 @@ def advance_semester():
         return redirect(url_for('home'))
     semester_id = int(request.form['semester_id'])
     message = advance_period(semester_id)
-    if message == 'running':
+    if message == 'special_registration':
         summary = enforce_minimums(semester_id)
         message = summary  
     conn = get_db()
-    semester = get_current_semester()
+    semester = get_active_semester()
     conn.close()
     return render_template('semester/manage.html',
                            semester=semester,
@@ -342,22 +362,39 @@ def retreat_semester():
     semester = conn.execute("SELECT * FROM semesters WHERE id = ?", (semester_id,)).fetchone()
     current = semester['current_period']
     PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
+    
     if current == 'setup':
-        message = 'Already at the first period'
+        # Try to go back to previous semester's grading period
+        prev_semester = conn.execute(
+            "SELECT * FROM semesters WHERE id < ? ORDER BY id DESC LIMIT 1",
+            (semester_id,)
+        ).fetchone()
+        if prev_semester:
+            conn.execute(
+                "UPDATE semesters SET current_period = 'grading' WHERE id = ?",
+                (prev_semester['id'],)
+            )
+            conn.commit()
+            message = f'Moved back to {prev_semester["name"]} grading period'
+        else:
+            message = 'Already at the first period'
     else:
         current_index = PERIOD_ORDER.index(current)
         prev_period = PERIOD_ORDER[current_index - 1]
-        conn.execute("UPDATE semesters SET current_period = ? WHERE id = ?", (prev_period, semester_id))
+        conn.execute(
+            "UPDATE semesters SET current_period = ? WHERE id = ?",
+            (prev_period, semester_id)
+        )
         conn.commit()
         message = f'Moved back to {prev_period}'
-    semester = get_current_semester()
+    
+    semester = get_active_semester()
     conn.close()
     return render_template('semester/manage.html',
                            semester=semester,
                            role=session['role'],
                            username=session['username'],
                            message=message)
-
 
 # ── CREATE COURSE (registrar) ─────────────────────────────────────────────────
 
@@ -368,7 +405,7 @@ def create_course_page():
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
-    current_semester = get_current_semester()
+    current_semester = get_active_semester()
     current_courses = conn.execute(
         """SELECT c.*, u.username as instructor_name
            FROM courses c JOIN users u ON c.instructor_id = u.id
@@ -406,7 +443,7 @@ def create_course_route():
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
-    current_semester = get_current_semester()
+    current_semester = get_active_semester()
     current_courses = conn.execute(
         """SELECT c.*, u.username as instructor_name
            FROM courses c JOIN users u ON c.instructor_id = u.id

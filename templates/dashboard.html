@@ -112,12 +112,23 @@
     <p>View all warnings on your account.</p>
   </a>
   <div class="card">
-    <h3>🎓 Apply for Graduation</h3>
-    <p>Submit your graduation application.</p>
+  <h3> Graduation</h3>
+  {% if grad_app and grad_app['status'] == 'pending' %}
+    <p> Your application is <strong>pending registrar review</strong>.</p>
+  {% elif grad_app and grad_app['status'] == 'approved' %}
+    <p> Congratulations! Your graduation has been <strong>approved</strong>.</p>
+  {% elif grad_app and grad_app['status'] == 'rejected' %}
+    <p> Your application was <strong>rejected</strong>. Check your warnings.</p>
+    <form method="POST" action="/graduation/apply" style="margin-top:.75rem;">
+      <button type="submit" class="btn btn-primary btn-sm">Re-apply</button>
+    </form>
+  {% else %}
+    <p>Submit your graduation application when you have 8 credits.</p>
     <form method="POST" action="/graduation/apply" style="margin-top:.75rem;">
       <button type="submit" class="btn btn-primary btn-sm">Apply</button>
     </form>
-  </div>
+  {% endif %}
+</div>
   {% endif %}
 
   {% if role == 'instructor' %}
