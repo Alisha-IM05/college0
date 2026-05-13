@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { getPageData } from '../lib/data';
 import { PageLayout } from '../components/Sidebar';
 
@@ -43,19 +43,11 @@ export function Profile(): React.ReactElement {
   const student = data.student || null;
 
   // Tutorial modal state — show on first visit (stored in localStorage)
-  const tutorialKey = `college0_tutorial_done_${username}`;
-  const [showTutorial, setShowTutorial] = useState(false);
+  const show = (data as any).show_tutorial === true;
+  const [showTutorial, setShowTutorial] = useState(show);
   const [step, setStep] = useState(0);
 
-  useEffect(() => {
-    if (role === 'student') {
-      const done = localStorage.getItem(tutorialKey);
-      if (!done) setShowTutorial(true);
-    }
-  }, []);
-
   const closeTutorial = () => {
-    localStorage.setItem(tutorialKey, 'true');
     setShowTutorial(false);
   };
 

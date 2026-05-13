@@ -534,6 +534,7 @@ def dashboard():
                         semester=dict(semester) if semester else None,
                         student_data=dict(student_data) if student_data else None,
                         grades=_rows_to_dicts(grades))
+    
 @app.route('/profile')
 def profile():
     if 'user_id' not in session:
@@ -544,11 +545,18 @@ def profile():
     if session['role'] == 'student':
         student = conn.execute("SELECT * FROM students WHERE id = ?", (session['user_id'],)).fetchone()
     conn.close()
+    
+    # show tutorial only once
+    show_tutorial = session.get('role') == 'student' and not session.get('tutorial_done')
+    if show_tutorial:
+        session['tutorial_done'] = True
+    
     return render_react('profile',
                         username=session['username'],
                         role=session['role'],
                         user=dict(user) if user else None,
-                        student=dict(student) if student else None)
+                        student=dict(student) if student else None,
+                        show_tutorial=show_tutorial)
     
     
 #start of Tanzina's code
