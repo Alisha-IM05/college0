@@ -254,22 +254,20 @@ def get_warning_count(user_id):
     return count
 
 def suspend_user(user_id, reason):
-    """
-    J-025: suspends user and records suspension.
-    J-027: records fine owed by suspended student.
-    """
+    """Suspends a user by updating their role to suspended"""
     conn = get_connection()
-
-    # get role before suspending
-    user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-
     conn.execute(
         "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
         (user_id,)
     )
+    # J-027: record fine owed by suspended student
+    conn.execute(
+        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+        (user_id, "FINE OWED: $200 suspension fine issued. Contact the registrar to pay and have your account reinstated.")
+    )
     conn.commit()
     conn.close()
-    print(f"User {user_id} suspended. Reason: {reason}")
+    print(f"User {user_id} has been suspended. Reason: {reason}")
 
 
 # ── COMPLAINT FUNCTIONS ───────────────────────────────────────────────────────
