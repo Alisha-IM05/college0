@@ -6,9 +6,9 @@ import { postForm, navigate } from '../lib/api';
 
 const QUICK_LOGINS = [
   { label: 'Registrar', username: 'registrar1', password: 'password123', cls: 'btn-registrar' },
-  { label: 'Instructor', username: 'instructor1', password: 'password123', cls: 'btn-instructor' },
-  { label: 'Student 1', username: 'student1', password: 'password123', cls: 'btn-student1' },
-  { label: 'Student 2', username: 'student2', password: 'password123', cls: 'btn-student2' },
+  { label: 'Instructor', username: 'prof_smith', password: 'password123', cls: 'btn-instructor' },
+  { label: 'Student 1', username: 'demo_student1', password: 'password123', cls: 'btn-student1' },
+  { label: 'Student 2', username: 'demo_student2', password: 'password123', cls: 'btn-student2' },
 ];
 
 export function Login(): React.ReactElement {

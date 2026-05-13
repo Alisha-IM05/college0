@@ -22,6 +22,9 @@ import { Register } from './pages/Register';
 import { InstructorCourses } from './pages/InstructorCourses';
 import { ClassDetail } from './pages/ClassDetail';
 import { Create } from './pages/Create';
+import { MyReviews } from './pages/MyReviews';
+import { Home } from './pages/Home';
+import { Profile } from './pages/Profile';
 
 const CLERK_PAGES = new Set(['login', 'apply', 'apply_status']);
 
@@ -63,6 +66,12 @@ function renderPage(pageId: string): React.ReactElement {
       return <ClassDetail />;
     case 'create':
       return <Create />;
+    case 'my_reviews':
+      return <MyReviews />;
+    case 'home': 
+      return <Home />;
+    case 'profile': 
+      return <Profile />;
   }
 }
 

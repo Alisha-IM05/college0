@@ -7,6 +7,10 @@ database/college0.db
 node_modules/
 frontend/node_modules/
 frontend/dist/
+<<<<<<< HEAD
 static/dist/
 
 
+=======
+database/college0.db
+>>>>>>> b5a609d0a291412e02b630286483b0cfc409b018

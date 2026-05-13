@@ -20,7 +20,14 @@ from modules.conduct import (
     get_user_warnings, get_warning_count, issue_warning,
     seed_conduct_data, mark_fine_paid
 )
-from modules.semester import ( advance_period, create_course,  register_student, admit_from_waitlist,enforce_minimums, submit_grade, apply_for_graduation, resolve_graduation)
+from modules.semester import (
+    advance_period, create_course, register_student,
+    admit_from_waitlist, enforce_minimums, submit_grade,
+    apply_for_graduation, resolve_graduation,
+    get_current_semester, get_current_period, 
+    use_honor_roll_to_remove_warning, submit_gpa_justification, 
+    resolve_gpa_flag, get_active_semester
+)
 
 from modules.auth import (
     submit_application, get_applications_for_clerk_user,
@@ -30,6 +37,7 @@ from modules.auth import (
     suspend_user, terminate_user, reactivate_user, list_manageable_users,
     require_role, verify_clerk_session, establish_clerk_session,
 )
+
 
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
@@ -73,6 +81,9 @@ _PAGE_TITLES = {
     'warnings':          'College0 — My Warnings',
     'complaints':        'College0 — Complaints',
     'taboo':             'College0 — Taboo Words',
+    'my_reviews':        'College0 — Reviews',
+    'home':              'College0 — AI-Enabled College Management',
+    'profile':           'College0 — My Profile',
 }
 
 
@@ -185,7 +196,22 @@ create_test_users()
 
 @app.route('/')
 def home():
-    return render_react('login')
+    conn = get_db()
+    semester = get_active_semester()
+    stats = {
+        'student_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='student'").fetchone()[0],
+        'instructor_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='instructor'").fetchone()[0],
+        'course_count': conn.execute("SELECT COUNT(*) FROM courses WHERE status='active'").fetchone()[0],
+    }
+    conn.close()
+    return render_react('home',
+                        semester=dict(semester) if semester else None,
+                        stats=stats)
+
+@app.route('/login', methods=['GET'])
+def login_page():
+    return render_react('login',
+                        clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -474,25 +500,19 @@ def dashboard():
     if 'user_id' not in session:
         return redirect(url_for('home'))
     conn = get_db()
-    semester = conn.execute(
-        """SELECT * FROM semesters 
-           ORDER BY CASE current_period
-               WHEN 'setup' THEN 1
-               WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3
-               WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5
-           END DESC LIMIT 1"""
-    ).fetchone()
+    semester = get_active_semester()
     student_data = None
-    student_data = conn.execute(
+    grades = []
+    grad_app = None 
+    if session['role'] == 'student':
+        student_data = conn.execute(
             """SELECT u.*, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
                FROM users u
                LEFT JOIN students s ON u.id = s.id
                WHERE u.id = ?""",
             (session['user_id'],)
         ).fetchone()
-    grades = conn.execute(
+        grades = conn.execute(
             """SELECT g.letter_grade, g.numeric_value, c.course_name, s.name as semester_name
                FROM grades g
                JOIN courses c ON g.course_id = c.id
@@ -501,6 +521,12 @@ def dashboard():
                ORDER BY s.id DESC""",
             (session['user_id'],)
         ).fetchall()
+        grad_app = conn.execute(
+            """SELECT * FROM graduation_applications
+            WHERE student_id = ?
+            ORDER BY id DESC LIMIT 1""",
+            (session['user_id'],)
+        ).fetchone()
     conn.close()
     return render_react('dashboard',
                         username=session['username'],
@@ -508,6 +534,21 @@ def dashboard():
                         semester=dict(semester) if semester else None,
                         student_data=dict(student_data) if student_data else None,
                         grades=_rows_to_dicts(grades))
+@app.route('/profile')
+def profile():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],)).fetchone()
+    student = None
+    if session['role'] == 'student':
+        student = conn.execute("SELECT * FROM students WHERE id = ?", (session['user_id'],)).fetchone()
+    conn.close()
+    return render_react('profile',
+                        username=session['username'],
+                        role=session['role'],
+                        user=dict(user) if user else None,
+                        student=dict(student) if student else None)
     
     
 #start of Tanzina's code
@@ -518,16 +559,7 @@ def course_registration():
     if 'user_id' not in session:
         return redirect(url_for('home'))
     conn = get_db()
-    semester = conn.execute(
-        """SELECT * FROM semesters
-           ORDER BY CASE current_period
-               WHEN 'setup' THEN 1
-               WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3
-               WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5
-           END DESC LIMIT 1"""
-    ).fetchone()
+    semester = get_active_semester()
     special_registration = False
     if session['role'] == 'student':
         sr = conn.execute(
@@ -536,12 +568,16 @@ def course_registration():
         ).fetchone()
         special_registration = sr and sr['special_registration'] == 1
     courses = conn.execute(
-        """SELECT c.*, u.username as instructor_name,
-           c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
-           FROM courses c
-           LEFT JOIN users u ON c.instructor_id = u.id
-           WHERE c.status = 'active' AND c.semester_id = ?""",
-        (semester['id'],)
+    """SELECT c.*, u.username as instructor_name,
+       c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
+       FROM courses c
+       LEFT JOIN users u ON c.instructor_id = u.id
+       WHERE c.status = 'active' AND c.semester_id = ?
+       AND c.id NOT IN (
+           SELECT course_id FROM enrollments
+           WHERE student_id = ? AND status = 'cancelled'
+       )""",
+    (semester['id'], session['user_id'])
     ).fetchall()
     enrolled = conn.execute(
         """SELECT c.*, u.username as instructor_name 
@@ -563,11 +599,12 @@ def course_registration():
     ).fetchall()
     waitlisted = conn.execute(
         """SELECT w.*, c.course_name, c.time_slot
-           FROM waitlist w
-           JOIN courses c ON w.course_id = c.id
-           WHERE w.student_id = ?
-           ORDER BY w.course_id""",
-        (session['user_id'],)
+        FROM waitlist w
+        JOIN courses c ON w.course_id = c.id
+        WHERE w.student_id = ?
+        AND c.semester_id = ?
+        ORDER BY w.course_id""",
+        (session['user_id'], semester['id'])
     ).fetchall()
     conn.close()
     return render_react('register',
@@ -585,13 +622,7 @@ def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
         return redirect(url_for('home'))
     conn = get_db()
-    semester = conn.execute(
-        """SELECT * FROM semesters
-           ORDER BY CASE current_period
-               WHEN 'setup' THEN 1 WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5 END DESC LIMIT 1"""
-    ).fetchone()
+    semester = get_active_semester()
     courses = conn.execute(
         """SELECT c.*, s.name as semester_name, s.current_period,
            (SELECT COUNT(*) FROM waitlist w 
@@ -600,6 +631,15 @@ def instructor_courses():
            WHERE c.instructor_id = ? AND c.semester_id = ?""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    enrolled_counts = {}
+    if semester and semester['current_period'] == 'grading':
+        for course in courses:
+            count = conn.execute(
+                """SELECT COUNT(*) as count FROM grades
+                WHERE course_id = ?""",
+                (course['id'],)
+            ).fetchone()['count']
+            enrolled_counts[course['id']] = count
     conn.close()
     return render_react('instructor_courses',
                         username=session['username'],
@@ -613,13 +653,7 @@ def register_for_course(course_id):
         return redirect(url_for('home'))
     message = register_student(session['user_id'], course_id)
     conn = get_db()
-    semester = conn.execute(
-        """SELECT * FROM semesters
-           ORDER BY CASE current_period
-               WHEN 'setup' THEN 1 WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5 END DESC LIMIT 1"""
-    ).fetchone()
+    semester = get_active_semester()
     special_registration = False
     if session['role'] == 'student':
         sr = conn.execute("SELECT special_registration FROM students WHERE id = ?", (session['user_id'],)).fetchone()
@@ -682,13 +716,9 @@ def semester_management():
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))
     conn = get_db()
-    semester = conn.execute(
-        """SELECT * FROM semesters ORDER BY CASE current_period
-               WHEN 'setup' THEN 1 WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5 END DESC LIMIT 1"""
-    ).fetchone()
+    semester = get_active_semester()
     conn.close()
+    print(f"DEBUG semester_management: id={semester['id']} name={semester['name']}")  # ADD THIS
     return render_react('manage',
                         username=session['username'],
                         role=session['role'],
@@ -700,10 +730,11 @@ def advance_semester():
         return redirect(url_for('home'))
     semester_id = int(request.form['semester_id'])
     message = advance_period(semester_id)
+    if message == 'special_registration':
+        summary = enforce_minimums(semester_id)
+        message = summary  
     conn = get_db()
-    semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY CASE current_period WHEN 'setup' THEN 1 WHEN 'registration' THEN 2 WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4 WHEN 'grading' THEN 5 END DESC LIMIT 1"
-    ).fetchone()
+    semester = get_active_semester()
     conn.close()
     return render_react('manage',
                         username=session['username'],
@@ -720,16 +751,33 @@ def retreat_semester():
     semester = conn.execute("SELECT * FROM semesters WHERE id = ?", (semester_id,)).fetchone()
     current = semester['current_period']
     PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
+    
     if current == 'setup':
-        message = 'Already at the first period'
+        # Try to go back to previous semester's grading period
+        prev_semester = conn.execute(
+            "SELECT * FROM semesters WHERE id < ? ORDER BY id DESC LIMIT 1",
+            (semester_id,)
+        ).fetchone()
+        if prev_semester:
+            conn.execute(
+                "UPDATE semesters SET current_period = 'grading' WHERE id = ?",
+                (prev_semester['id'],)
+            )
+            conn.commit()
+            message = f'Moved back to {prev_semester["name"]} grading period'
+        else:
+            message = 'Already at the first period'
     else:
-        prev_period = PERIOD_ORDER[PERIOD_ORDER.index(current) - 1]
-        conn.execute("UPDATE semesters SET current_period = ? WHERE id = ?", (prev_period, semester_id))
+        current_index = PERIOD_ORDER.index(current)
+        prev_period = PERIOD_ORDER[current_index - 1]
+        conn.execute(
+            "UPDATE semesters SET current_period = ? WHERE id = ?",
+            (prev_period, semester_id)
+        )
         conn.commit()
         message = f'Moved back to {prev_period}'
-    semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY CASE current_period WHEN 'setup' THEN 1 WHEN 'registration' THEN 2 WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4 WHEN 'grading' THEN 5 END DESC LIMIT 1"
-    ).fetchone()
+    
+    semester = get_active_semester()
     conn.close()
     return render_react('manage',
                         username=session['username'],
@@ -746,12 +794,7 @@ def create_course_page():
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
-    current_semester = conn.execute(
-        """SELECT * FROM semesters ORDER BY CASE current_period
-               WHEN 'setup' THEN 1 WHEN 'registration' THEN 2
-               WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4
-               WHEN 'grading' THEN 5 END DESC LIMIT 1"""
-    ).fetchone()
+    current_semester = get_active_semester()
     current_courses = conn.execute(
         """SELECT c.*, u.username as instructor_name
            FROM courses c JOIN users u ON c.instructor_id = u.id
@@ -786,9 +829,7 @@ def create_course_route():
     conn = get_db()
     instructors = conn.execute("SELECT id, username FROM users WHERE role = 'instructor' AND status = 'active'").fetchall()
     semesters = conn.execute("SELECT * FROM semesters").fetchall()
-    current_semester = conn.execute(
-        "SELECT * FROM semesters ORDER BY CASE current_period WHEN 'setup' THEN 1 WHEN 'registration' THEN 2 WHEN 'special_registration' THEN 3 WHEN 'running' THEN 4 WHEN 'grading' THEN 5 END DESC LIMIT 1"
-    ).fetchone()
+    current_semester = get_active_semester()
     current_courses = conn.execute(
         "SELECT c.*, u.username as instructor_name FROM courses c JOIN users u ON c.instructor_id = u.id WHERE c.semester_id = ?",
         (current_semester['id'],)
@@ -861,7 +902,7 @@ def graduation_resolve_route(student_id):
         message = 'No pending application found for this student'
     return redirect(url_for('graduation_resolve_page'))
 
-#End of Tanzina's code
+
 # ── CLASS DETAIL (instructor) ─────────────────────────────────────────────────
 
 @app.route('/courses/<int:course_id>')
@@ -869,7 +910,17 @@ def class_detail(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
     conn = get_db()
-    course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+    course = conn.execute(
+        "SELECT * FROM courses WHERE id = ?", (course_id,)
+    ).fetchone()
+
+    if course is None:
+        conn.close()
+        return "Course not found", 404
+    if session['role'] == 'instructor' and course['instructor_id'] != session['user_id']:
+        conn.close()
+        return "Access denied — this course is not assigned to you", 403
+    
     enrolled = conn.execute(
         """SELECT u.id, u.username, g.letter_grade 
            FROM enrollments e JOIN users u ON e.student_id = u.id
@@ -911,10 +962,10 @@ def submit_grade_route(course_id):
 def admit_waitlist_route(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
     student_id = int(request.form['student_id'])
     message = admit_from_waitlist(course_id, student_id, session['user_id'])
     return redirect(url_for('class_detail', course_id=course_id))
+
 @app.route('/courses/<int:course_id>/reject', methods=['POST'])
 def reject_waitlist_route(course_id):
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -936,8 +987,115 @@ def reject_waitlist_route(course_id):
     conn.close()
     return redirect(url_for('class_detail', course_id=course_id))
 
+@app.route('/warnings/remove/<int:warning_id>', methods=['POST'])
+def remove_warning_with_honor_roll(warning_id):
+    if 'user_id' not in session or session['role'] != 'student':
+        return redirect(url_for('home'))
+    from modules.semester import use_honor_roll_to_remove_warning
+    message = use_honor_roll_to_remove_warning(session['user_id'], warning_id)
+    return redirect(url_for('view_warnings'))
+
+## ── FLAGGED GPAS ─────────────────────────────────────────────────
+
+@app.route('/flagged-gpas')
+def flagged_gpas_page():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    conn = get_db()
+    if session['role'] == 'registrar':
+        flags = conn.execute(
+            """SELECT f.*, c.course_name, u.username as instructor_name
+               FROM flagged_course_gpas f
+               JOIN courses c ON f.course_id = c.id
+               JOIN users u ON f.instructor_id = u.id
+               WHERE f.status IN ('pending', 'justified')
+               ORDER BY f.flagged_at DESC"""
+        ).fetchall()
+    elif session['role'] == 'instructor':
+        flags = conn.execute(
+            """SELECT f.*, c.course_name
+               FROM flagged_course_gpas f
+               JOIN courses c ON f.course_id = c.id
+               WHERE f.instructor_id = ? AND f.status = 'pending'
+               ORDER BY f.flagged_at DESC""",
+            (session['user_id'],)
+        ).fetchall()
+    else:
+        conn.close()
+        return redirect(url_for('home'))
+    conn.close()
+    return render_template('semester/flagged_gpas.html',
+                           flags=flags,
+                           role=session['role'],
+                           username=session['username'])
+
+
+@app.route('/flagged-gpas/justify/<int:flag_id>', methods=['POST'])
+def justify_gpa_flag(flag_id):
+    if 'user_id' not in session or session['role'] != 'instructor':
+        return redirect(url_for('home'))
+    from modules.semester import submit_gpa_justification
+    justification = request.form.get('justification', '')
+    submit_gpa_justification(session['user_id'], flag_id, justification)
+    return redirect(url_for('flagged_gpas_page'))
+
+
+@app.route('/flagged-gpas/resolve/<int:flag_id>', methods=['POST'])
+def resolve_gpa_flag_route(flag_id):
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    from modules.semester import resolve_gpa_flag
+    decision = request.form.get('decision')
+    resolve_gpa_flag(session['user_id'], flag_id, decision)
+    return redirect(url_for('flagged_gpas_page'))
+
+
+
+
+#End of Tanzina's code
 
 # ── REVIEWS ───────────────────────────────────────────────────────────────────
+@app.route('/reviews')
+def my_reviews_page():
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    conn = get_db()
+    if session['role'] == 'student':
+        courses = conn.execute(
+            """SELECT DISTINCT c.id, c.course_name, c.time_slot,
+                      e.grade, e.status as enrollment_status,
+                      s.name as semester_name,
+                      r.id as review_id
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               JOIN semesters s ON c.semester_id = s.id
+               LEFT JOIN reviews r ON r.course_id = c.id AND r.student_id = e.student_id
+               WHERE e.student_id = ?
+               ORDER BY e.enrolled_at DESC""",
+            (session['user_id'],)
+        ).fetchall()
+        conn.close()
+        return render_react('my_reviews',
+                            username=session['username'],
+                            role=session['role'],
+                            courses=_rows_to_dicts(courses))
+    else:
+        courses = conn.execute(
+            """SELECT c.id, c.course_name, c.time_slot,
+                      s.name as semester_name,
+                      AVG(r.star_rating) as avg_rating,
+                      COUNT(r.id) as review_count
+               FROM courses c
+               JOIN semesters s ON c.semester_id = s.id
+               LEFT JOIN reviews r ON r.course_id = c.id AND r.is_visible = 1
+               GROUP BY c.id
+               ORDER BY s.id DESC, c.course_name"""
+        ).fetchall()
+        conn.close()
+        return render_react('my_reviews',
+                            username=session['username'],
+                            role=session['role'],
+                            courses=_rows_to_dicts(courses))
 
 @app.route('/reviews/<int:course_id>')
 def view_reviews(course_id):
@@ -945,6 +1103,20 @@ def view_reviews(course_id):
         return redirect(url_for('home'))
     conn = get_db()
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+ 
+    # Check if this student was ever enrolled (for showing/hiding the form)
+    was_enrolled = None
+    already_reviewed = None
+    if session['role'] == 'student':
+        was_enrolled = conn.execute(
+            "SELECT grade FROM enrollments WHERE student_id = ? AND course_id = ? ORDER BY enrolled_at DESC LIMIT 1",
+            (session['user_id'], course_id)
+        ).fetchone()
+        already_reviewed = conn.execute(
+            "SELECT id FROM reviews WHERE student_id = ? AND course_id = ?",
+            (session['user_id'], course_id)
+        ).fetchone()
+ 
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)
@@ -1156,7 +1328,7 @@ def add_taboo():
                         message=message,
                         message_type=message_type)
 
-app.route('/taboo/remove/<word>')
+@app.route('/taboo/remove/<word>')
 def remove_taboo(word):
     if 'user_id' not in session or session['role'] != 'registrar':
         return redirect(url_for('home'))

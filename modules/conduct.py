@@ -2,7 +2,8 @@ import re
 from database.db import get_connection
 
 
-# TABOO WORD FUNCTIONS
+# ── TABOO WORD FUNCTIONS ──────────────────────────────────────────────────────
+
 def get_taboo_words():
     """Gets the full list of taboo words from the database"""
     conn = get_connection()
@@ -54,7 +55,8 @@ def filter_review(text):
     return filtered_text, taboo_count
 
 
-#  REVIEW FUNCTIONS 
+# ── REVIEW FUNCTIONS ──────────────────────────────────────────────────────────
+
 def submit_review(student_id, course_id, star_rating, review_text):
     """
     Student submits a review.
@@ -194,7 +196,7 @@ def update_course_rating(course_id):
             )
 
 
-#  WARNING FUNCTIONS
+# ── WARNING FUNCTIONS ─────────────────────────────────────────────────────────
 
 def issue_warning(user_id, reason):
     """
@@ -252,25 +254,24 @@ def get_warning_count(user_id):
     return count
 
 def suspend_user(user_id, reason):
-    """
-    J-025: suspends user and records suspension.
-    J-027: records fine owed by suspended student.
-    """
+    """Suspends a user by updating their role to suspended"""
     conn = get_connection()
-
-    # get role before suspending
-    user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-
     conn.execute(
         "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
         (user_id,)
     )
+    # J-027: record fine owed by suspended student
+    conn.execute(
+        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+        (user_id, "FINE OWED: $200 suspension fine issued. Contact the registrar to pay and have your account reinstated.")
+    )
     conn.commit()
     conn.close()
-    print(f"User {user_id} suspended. Reason: {reason}")
+    print(f"User {user_id} has been suspended. Reason: {reason}")
 
 
-#  COMPLAINT FUNCTIONS
+# ── COMPLAINT FUNCTIONS ───────────────────────────────────────────────────────
+
 def file_student_complaint(filed_by, filed_against_id, description):
     """
     J-001: student files a complaint against a student or instructor.
@@ -495,7 +496,7 @@ def mark_fine_paid(user_id):
     return "success:Fine marked as paid."
 
 
-# SEED DATA FOR DEMO
+# ── SEED DATA FOR DEMO ────────────────────────────────────────────────────────
 
 def seed_conduct_data():
     """

@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS semesters (
 CREATE TABLE IF NOT EXISTS semester_periods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     semester_id INTEGER NOT NULL,
-    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'running', 'grading')),
+    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'special_registration', 'running', 'grading')),
     start_date TIMESTAMP,
     end_date TIMESTAMP,
     FOREIGN KEY (semester_id) REFERENCES semesters(id)
@@ -205,4 +205,17 @@ CREATE TABLE IF NOT EXISTS recommendations (
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES users(id),
     FOREIGN KEY (course_id) REFERENCES courses(id)
+);
+
+CREATE TABLE IF NOT EXISTS flagged_course_gpas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    class_gpa REAL NOT NULL,
+    justification TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'justified', 'warned', 'terminated')),
+    flagged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES courses(id),
+    FOREIGN KEY (instructor_id) REFERENCES users(id)
 );
