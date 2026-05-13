@@ -55,7 +55,7 @@ export function Home(): React.ReactElement {
             <div style={{ display: 'flex', gap: 12 }}>
               <a href="/apply?role=student" style={{ background: 'white', color: '#2E4A7A', padding: '10px 24px', borderRadius: 6, fontWeight: 700, textDecoration: 'none', fontSize: 14 }}>Apply as Student</a>
               <a href="/apply?role=instructor" style={{ background: 'rgba(255,255,255,.15)', color: 'white', padding: '10px 24px', borderRadius: 6, fontWeight: 600, textDecoration: 'none', fontSize: 14, border: '1px solid rgba(255,255,255,.3)' }}>Apply as Instructor</a>
-              <a href="/apply_status" style={{ color: 'rgba(255,255,255,.7)', padding: '10px 16px', borderRadius: 6, fontWeight: 500, textDecoration: 'none', fontSize: 14 }}>Check Status →</a>
+              <a href="/apply/status" style={{ color: 'rgba(255,255,255,.7)', padding: '10px 16px', borderRadius: 6, fontWeight: 500, textDecoration: 'none', fontSize: 14 }}>Check Status →</a>
             </div>
           </div>
 
