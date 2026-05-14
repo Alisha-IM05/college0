@@ -4,12 +4,27 @@ import { SignedIn, SignedOut, SignIn, useAuth } from '@clerk/clerk-react';
 import { getPageData } from '../lib/data';
 import { postForm, navigate } from '../lib/api';
 
-const QUICK_LOGINS = [
-  { label: 'Registrar', username: 'registrar1', password: 'password123', cls: 'btn-registrar' },
-  { label: 'Instructor', username: 'prof_smith', password: 'password123', cls: 'btn-instructor' },
-  { label: 'Student 1', username: 'demo_student1', password: 'password123', cls: 'btn-student1' },
-  { label: 'Student 2', username: 'demo_student2', password: 'password123', cls: 'btn-student2' },
-];
+const QUICK_LOGINS = {
+  registrar: [
+    { label: 'Registrar 1', username: 'registrar1', password: 'password123' },
+  ],
+  instructor: [
+    { label: 'Prof. Smith', username: 'prof_smith', password: 'password123' },
+    { label: 'Prof. Jones', username: 'prof_jones', password: 'password123' },
+  ],
+  student: [
+    { label: 'Demo Student 1', username: 'demo_student1', password: 'password123' },
+    { label: 'Demo Student 2', username: 'demo_student2', password: 'password123' },
+    { label: 'Alice', username: 'alice', password: 'password123' },
+    { label: 'Bob', username: 'bob', password: 'password123' },
+    { label: 'Carol', username: 'carol', password: 'password123' },
+    { label: 'David', username: 'david', password: 'password123' },
+    { label: 'Eve', username: 'eve', password: 'password123' },
+    { label: 'Frank', username: 'frank', password: 'password123' },
+    { label: 'Grace', username: 'grace', password: 'password123' },
+    { label: 'Henry', username: 'henry', password: 'password123' },
+  ],
+};
 
 export function Login(): React.ReactElement {
   const data = getPageData();
@@ -26,6 +41,71 @@ export function Login(): React.ReactElement {
     } else {
       setDemoError(resp.error || 'Invalid username or password.');
     }
+  }
+
+  function QuickDropdown({
+    label,
+    color,
+    users,
+  }: {
+    label: string;
+    color: string;
+    users: { label: string; username: string; password: string }[];
+  }) {
+    const [selected, setSelected] = useState('');
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+        <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#64748b' }}>
+          {label}
+        </label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <select
+            value={selected}
+            onChange={e => setSelected(e.target.value)}
+            disabled={submitting}
+            style={{
+              flex: 1, minWidth: 160,
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: '1px solid #e2e8f0',
+              fontSize: 13,
+              background: 'white',
+              color: selected ? '#1e293b' : '#94a3b8',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">Select {label}...</option>
+            {users.map(u => (
+              <option key={u.username} value={u.username}>{u.label}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={submitting || !selected}
+            onClick={() => {
+              const user = users.find(u => u.username === selected);
+              if (user) void doDemoLogin(user.username, user.password);
+            }}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: 'none',
+              background: selected ? color : '#e2e8f0',
+              color: selected ? 'white' : '#94a3b8',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: selected ? 'pointer' : 'not-allowed',
+              transition: 'all .15s',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Go →
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -59,21 +139,13 @@ export function Login(): React.ReactElement {
 
         <div className="quick-login-strip">
           <p className="label">— Quick Login (Demo) —</p>
-          <div className="quick-btns">
-            {QUICK_LOGINS.map((q) => (
-              <button
-                key={q.username}
-                type="button"
-                className={q.cls}
-                disabled={submitting}
-                onClick={() => void doDemoLogin(q.username, q.password)}
-              >
-                {q.label}
-              </button>
-            ))}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <QuickDropdown label="Registrar" color="#dc2626" users={QUICK_LOGINS.registrar} />
+            <QuickDropdown label="Instructor" color="#16a34a" users={QUICK_LOGINS.instructor} />
+            <QuickDropdown label="Student" color="#7c3aed" users={QUICK_LOGINS.student} />
           </div>
           {demoError && (
-            <p className="error" style={{ textAlign: 'center' }}>{demoError}</p>
+            <p className="error" style={{ textAlign: 'center', marginTop: 10 }}>{demoError}</p>
           )}
         </div>
       </div>
@@ -81,11 +153,6 @@ export function Login(): React.ReactElement {
   );
 }
 
-/**
- * Mounted once the visitor is signed in via Clerk. Exchanges the Clerk JWT
- * for a Flask session via POST /auth/clerk-login, then sends the user to
- * /dashboard (or /change-password when UC-11 still applies).
- */
 function ClerkBridge(): React.ReactElement {
   const { getToken, signOut } = useAuth();
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +163,6 @@ function ClerkBridge(): React.ReactElement {
     (async () => {
       const params = new URLSearchParams(window.location.search);
       if (params.get('signed_out') === '1') {
-        // Came from Flask /logout while a Clerk session was still active.
-        // Sign out of Clerk too, then reload `/` cleanly so the SignIn
-        // widget can take over instead of us bridging the JWT right back
-        // into a fresh Flask session.
         try {
           await signOut();
         } finally {
