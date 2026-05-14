@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>College0 Course Recommendations</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Arial, sans-serif; background: #f3f6fc; color: #333; }
+.navbar {
+  height: 64px;
+  margin: 28px 34px 0;
+  padding: 0 34px;
+  background: #223f66;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand { font-size: 24px; font-weight: 700; }
+.nav-right { color: #b7c4d5; font-size: 15px; }
+.nav-right a { color: #b7c4d5; text-decoration: none; margin-left: 6px; }
+.page { max-width: 1180px; margin: 0 auto; padding: 26px 42px 34px; }
+h1 { color: #223f66; margin: 0 0 4px; font-size: 30px; }
+.subtitle { margin: 0 0 4px; color: #666; font-size: 16px; }
+.profile {
+  display: flex;
+  gap: 34px;
+  align-items: center;
+  background: #eaf1fa;
+  border: 2px solid #cbdcf0;
+  border-radius: 8px 8px 0 0;
+  padding: 8px 28px;
+  color: #555;
+}
+.profile strong { color: #223f66; }
+.standing {
+  display: inline-block;
+  padding: 6px 20px;
+  border-radius: 6px;
+  background: #e4f5e9;
+  color: #267640;
+  font-weight: 700;
+  font-size: 13px;
+}
+.rec-list { display: flex; flex-direction: column; gap: 28px; }
+.card {
+  position: relative;
+  background: white;
+  border: 2px solid #e2eaf5;
+  border-radius: 10px;
+  padding: 18px 22px 22px;
+}
+.code {
+  display: inline-block;
+  min-width: 86px;
+  text-align: center;
+  background: #223f66;
+  color: white;
+  border-radius: 5px;
+  padding: 7px 14px;
+  font-weight: 700;
+  margin-right: 12px;
+}
+.course-name { color: #223f66; font-size: 22px; font-weight: 700; }
+.reason-title { font-weight: 700; margin-top: 4px; font-size: 17px; }
+.reason { margin: 6px 0 12px 20px; color: #666; line-height: 1.45; }
+.meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: #999; }
+.difficulty {
+  position: absolute;
+  top: 16px;
+  right: 22px;
+  min-width: 150px;
+  text-align: center;
+  border-radius: 6px;
+  padding: 8px 18px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.intro { background: #e4f5e9; color: #267640; }
+.intermediate { background: #e4f5e9; color: #267640; }
+.advanced { background: #fff3cd; color: #7b5c0b; }
+.enroll {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  width: 150px;
+  border: 0;
+  border-radius: 7px;
+  background: #223f66;
+  color: white;
+  padding: 10px 0;
+  font-weight: 700;
+  cursor: pointer;
+}
+.empty { background: white; border: 2px solid #e2eaf5; border-radius: 10px; padding: 22px; color: #777; }
+@media (max-width: 760px) {
+  .navbar { margin: 0; }
+  .page { padding: 22px 18px; }
+  .profile { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .difficulty, .enroll { position: static; display: block; margin-top: 12px; }
+  .meta { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="brand">College0</div>
+  <div class="nav-right">Welcome, {{ username }} <a href="/logout">Logout</a></div>
+</nav>
+
+<main class="page">
+  <h1>Course Recommendations</h1>
+  <p class="subtitle">Personalized suggestions based on your academic history and GPA.</p>
+
+  <div class="profile">
+    <div><strong>GPA: {{ '%.2f'|format(profile.gpa) }}</strong></div>
+    <div>Completed: {{ profile.completed }} / {{ profile.total }} courses</div>
+    <div>Standing: <span class="standing">{{ profile.standing }}</span></div>
+  </div>
+
+  <section class="rec-list">
+    {% if recommendations %}
+      {% for rec in recommendations %}
+      {% set name = rec.course.course_name %}
+      {% set code = name.split(' - ')[0] if ' - ' in name else name.split(' ')[0] %}
+      {% set title = name.split(' - ')[1] if ' - ' in name else name %}
+      {% set diff = rec.difficulty|lower %}
+      <article class="card">
+        <span class="code">{{ code }}</span>
+        <span class="course-name">{{ title }}</span>
+        <span class="difficulty {{ 'advanced' if diff == 'advanced' else 'intermediate' }}">{{ rec.difficulty }}</span>
+        <div class="reason-title">Recommended for Next Semester</div>
+        <p class="reason">{{ rec.reason }}</p>
+        <div class="meta">
+          <div>Instructor: {{ rec.instructor }}</div>
+          <div>Time: {{ rec.course.time_slot or 'TBD' }}</div>
+        </div>
+        <form method="POST" action="/ai/enroll/{{ rec.course.id }}">
+          <button class="enroll" type="submit">Enroll</button>
+        </form>
+      </article>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No course recommendations are available right now.</div>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>

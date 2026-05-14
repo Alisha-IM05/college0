@@ -1,3 +1,5 @@
 flask>=3.0
+chromadb
+google-generativeai
 clerk-backend-api>=5.0
 python-dotenv>=1.0
