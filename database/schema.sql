@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS students (
     honor_roll INTEGER DEFAULT 0,
     credits_earned INTEGER DEFAULT 0,
     special_registration INTEGER DEFAULT 0,
+    termination_pending INTEGER DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'probation'))
 );
 

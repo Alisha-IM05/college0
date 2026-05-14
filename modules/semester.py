@@ -100,6 +100,16 @@ def advance_period(semester_id):
                         break  # one warning per course is enough
 
             conn.execute("UPDATE students SET special_registration = 0")
+            # Terminate any students flagged during grading
+            pending = conn.execute(
+                "SELECT id FROM students WHERE termination_pending = 1"
+            ).fetchall()
+            for s in pending:
+                conn.execute(
+                    "UPDATE users SET role = 'terminated' WHERE id = ?",
+                    (s['id'],)
+                )
+            conn.execute("UPDATE students SET termination_pending = 0")
             existing = conn.execute(
                 "SELECT * FROM semesters WHERE name = ?", (new_name,)
             ).fetchone()
@@ -873,8 +883,12 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
         # Terminate the student if GPA is too low or they failed a course twice
         if cumulative_gpa < 2.0 or failed_twice_count > 0:
             conn.execute(
-                "UPDATE users SET role = 'terminated' WHERE id = ?",
+                "UPDATE students SET termination_pending = 1 WHERE id = ?",
                 (student_id,)
+            )
+            _insert_warning_only(
+                student_id,
+                'Your GPA has fallen below the minimum threshold. You will be terminated at the start of the next semester unless resolved.'
             )
             conn.commit()
             return
