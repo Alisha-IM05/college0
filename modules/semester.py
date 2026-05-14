@@ -1,5 +1,6 @@
 # Semester & Course Management by Tanzina Sumona
 from database.db import get_db
+from modules.conduct import issue_warning
 
 
 PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
@@ -671,15 +672,9 @@ def warn_underenrolled_students(semester_id, conn=None):
             ).fetchone()['count']
             # If the student has fewer than 2 active courses, send a warning
             if active_count < 2:
-                conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
-                    (
-                        student['student_id'],
-                        'You are enrolled in fewer than 2 courses this semester'
-                    )
+                issue_warning(
+                    student['student_id'],
+                    'You are enrolled in fewer than 2 courses this semester'
                 )
             conn.commit()
     finally:

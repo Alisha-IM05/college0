@@ -38,7 +38,7 @@ def filter_review(text):
     Scans review text for taboo words using whole-word matching (H-017).
     Returns: (filtered_text, taboo_count)
     - filtered_text has bad words replaced with asterisks
-    - taboo_count is how many distinct taboo words were found
+    - taboo_count is the total number of taboo word occurrences found (not distinct words)
     """
     taboo_words = get_taboo_words()
     taboo_count = 0
@@ -47,8 +47,9 @@ def filter_review(text):
     for word in taboo_words:
         # H-017: whole-word matching — won't flag "badword" inside "notbadwordhere"
         pattern = r'\b' + re.escape(word) + r'\b'
-        if re.search(pattern, filtered_text, flags=re.IGNORECASE):
-            taboo_count += 1
+        matches = re.findall(pattern, filtered_text, flags=re.IGNORECASE)
+        if matches:
+            taboo_count += len(matches)  # count every occurrence, not just whether the word appeared
             replacement = '*' * len(word)
             filtered_text = re.sub(pattern, replacement, filtered_text, flags=re.IGNORECASE)
 
@@ -100,10 +101,11 @@ def submit_review(student_id, course_id, star_rating, review_text):
 
     # H-021/H-022: apply rules based on taboo word count
     if taboo_count >= 3:
-        # H-021: hide review entirely for 3+ taboo words
-        # H-022: issue 2 warnings
-        issue_warning(student_id, "Review hidden: contained 3 or more taboo words.")
-        issue_warning(student_id, "Second warning: review with 3+ taboo words was not published.")
+        # H-021: save review with is_visible=0 so it exists in DB but is hidden from all non-registrar views
+        # H-022: issue 2 warnings — issued one at a time so each one independently triggers suspension check
+        save_review(student_id, course_id, star_rating, review_text, filtered_text, is_visible=0)
+        issue_warning(student_id, f"Review hidden: contained {taboo_count} taboo word(s) — review not published.")
+        issue_warning(student_id, "Second warning issued: review with 3 or more taboo words is never shown.")
         return "warning:Your review was not posted because it contained too many inappropriate words. You have received 2 warnings."
 
     elif taboo_count in [1, 2]:
@@ -277,6 +279,50 @@ def suspend_user(user_id, reason):
         "INSERT INTO fines (user_id, amount, reason, paid, approved) VALUES (?, 200.00, ?, 0, 0)",
         (user_id, reason)
     )
+    conn.commit()
+    conn.close()
+
+
+def suspend_instructor(user_id, reason):
+    """
+    Suspends an instructor without issuing a fine.
+    Instructors cannot pay their way out — they sit out until the registrar
+    reactivates them after the next semester (via reactivate_suspended_instructors).
+    Sets role AND status to 'suspended' so the frontend gate redirects them.
+    """
+    conn = get_connection()
+    user = conn.execute("SELECT role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user or user['status'] == 'suspended':
+        conn.close()
+        return
+    conn.execute(
+        "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def reactivate_suspended_instructors():
+    """
+    Called when a new semester begins (advance_period creates a new semester).
+    Restores all suspended instructors to active so they can teach again.
+    Clears their warnings so the slate is clean for the new semester.
+    Does NOT touch students — student suspension requires fine payment + registrar approval.
+    """
+    conn = get_connection()
+    suspended_instructors = conn.execute(
+        """SELECT u.id FROM users u
+           WHERE u.status = 'suspended'
+           AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = u.id)"""
+    ).fetchall()
+    for row in suspended_instructors:
+        uid = row['id']
+        conn.execute(
+            "UPDATE users SET status = 'active', role = 'instructor' WHERE id = ?",
+            (uid,)
+        )
+        conn.execute("DELETE FROM warnings WHERE user_id = ?", (uid,))
     conn.commit()
     conn.close()
 
