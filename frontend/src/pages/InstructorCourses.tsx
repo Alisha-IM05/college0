@@ -7,6 +7,7 @@ export function InstructorCourses(): React.ReactElement {
   const username = data.username || '—';
   const semester = data.semester;
   const allCourses = data.courses || [];
+  const students = data.students || [];
   const isGrading = semester?.current_period === 'grading';
 
   const activeCourses = allCourses.filter((c: any) => c.status === 'active');
@@ -85,6 +86,39 @@ export function InstructorCourses(): React.ReactElement {
         : <div className="card"><p className="muted">No active courses this semester.</p></div>
       }
       {cancelledCourses.length > 0 && <CourseTable courses={cancelledCourses} cancelled />}
+      {students.length > 0 && (
+        <div className="card" style={{ marginTop: '1.5rem', padding: 0 }}>
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid #e2e8f0' }}>
+            <strong>📋 Student Academic Records</strong>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Course</th>
+                <th>Status</th>
+                <th>Semester GPA</th>
+                <th>Cumulative GPA</th>
+                <th>Credits</th>
+                <th>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {students.map((s: any, i: number) => (
+                <tr key={i}>
+                  <td>{s.username}</td>
+                  <td>{s.course_name}</td>
+                  <td>{s.status}</td>
+                  <td>{(s.semester_gpa ?? 0).toFixed(2)}</td>
+                  <td>{(s.cumulative_gpa ?? 0).toFixed(2)}</td>
+                  <td>{s.credits_earned ?? 0}</td>
+                  <td>{s.letter_grade ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </PageLayout>
   );
 }

@@ -739,12 +739,27 @@ def instructor_courses():
            ORDER BY c.status ASC, c.course_name ASC""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    students_in_classes = conn.execute(
+        """SELECT u.username, u.email, u.status,
+           s.semester_gpa, s.cumulative_gpa, s.credits_earned,
+           c.course_name, g.letter_grade
+           FROM enrollments e
+           JOIN users u ON e.student_id = u.id
+           JOIN students s ON u.id = s.id
+           JOIN courses c ON e.course_id = c.id
+           LEFT JOIN grades g ON g.student_id = e.student_id AND g.course_id = e.course_id
+           WHERE c.instructor_id = ? AND c.semester_id = ?
+           AND e.status = 'enrolled'
+           ORDER BY c.course_name, u.username""",
+        (session['user_id'], semester['id'])
+    ).fetchall()
     conn.close()
     return render_react('instructor_courses',
                         username=session['username'],
                         role=session['role'],
                         semester=dict(semester) if semester else None,
-                        courses=_rows_to_dicts(courses))
+                        courses=_rows_to_dicts(courses),
+                        students=_rows_to_dicts(students_in_classes))
 
 @app.route('/courses/register/<int:course_id>', methods=['POST'])
 def register_for_course(course_id):
