@@ -891,11 +891,12 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
                 "UPDATE students SET termination_pending = 1 WHERE id = ?",
                 (student_id,)
             )
-            _insert_warning_only(
-                student_id,
-                'Your GPA has fallen below the minimum threshold. You will be terminated at the start of the next semester unless resolved.'
+            conn.execute(
+                "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+                (student_id, 'Your GPA has fallen below the minimum threshold. You will be terminated at the start of the next semester unless resolved.')
             )
             conn.commit()
+            conn.close()
             return
         # Academic notice — does NOT count toward conduct suspension threshold
         if 2.0 <= cumulative_gpa <= 2.25:
