@@ -15,3 +15,7 @@ static/dist/
 database/college0.db
 >>>>>>> b5a609d0a291412e02b630286483b0cfc409b018
 database/college0.db
+pycache/
+*.pyc
+pycache/
+*.pyc
