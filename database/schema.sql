@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('student', 'instructor', 'registrar', 'suspended', 'terminated', 'graduated')),
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'terminated')),
+    must_change_password INTEGER NOT NULL DEFAULT 0,   -- 1 = force password change on next login (UC-11)
+    clerk_user_id TEXT UNIQUE,          -- Clerk identity; copied from applications.clerk_user_id on approve
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS applications (
     email TEXT NOT NULL,
     role_applied TEXT NOT NULL CHECK(role_applied IN ('student', 'instructor')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+    clerk_user_id TEXT,                 -- links the Clerk identity that submitted this application (UC-07/08)
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP
 );
@@ -55,7 +58,7 @@ CREATE TABLE IF NOT EXISTS semesters (
 CREATE TABLE IF NOT EXISTS semester_periods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     semester_id INTEGER NOT NULL,
-    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'running', 'grading')),
+    period_name TEXT NOT NULL CHECK(period_name IN ('setup', 'registration', 'special_registration', 'running', 'grading')),
     start_date TIMESTAMP,
     end_date TIMESTAMP,
     FOREIGN KEY (semester_id) REFERENCES semesters(id)
@@ -154,15 +157,18 @@ CREATE TABLE IF NOT EXISTS warnings (
 
 CREATE TABLE IF NOT EXISTS complaints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filed_by INTEGER NOT NULL,          -- user who filed the complaint
-    filed_against INTEGER NOT NULL,     -- user being complained about
+    filed_by INTEGER NOT NULL,
+    filed_against INTEGER NOT NULL,
     description TEXT NOT NULL,
+    complaint_type TEXT DEFAULT 'student' CHECK(complaint_type IN ('student', 'instructor')),
+    requested_action TEXT CHECK(requested_action IN ('warning', 'deregister', NULL)),
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'resolved')),
-    resolution TEXT,                    -- what the registrar decided
+    resolution TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (filed_by) REFERENCES users(id),
     FOREIGN KEY (filed_against) REFERENCES users(id)
 );
+ 
 
 
 -- ============================================================
@@ -199,4 +205,17 @@ CREATE TABLE IF NOT EXISTS recommendations (
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES users(id),
     FOREIGN KEY (course_id) REFERENCES courses(id)
+);
+
+CREATE TABLE IF NOT EXISTS flagged_course_gpas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    class_gpa REAL NOT NULL,
+    justification TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'justified', 'warned', 'terminated')),
+    flagged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES courses(id),
+    FOREIGN KEY (instructor_id) REFERENCES users(id)
 );

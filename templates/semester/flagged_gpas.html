@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Flagged Course GPAs</h2>
+
+{% if not flags %}
+    <p>No flagged courses to review.</p>
+{% else %}
+<table border="1" cellpadding="8" style="width:100%;border-collapse:collapse;background:white;">
+    <tr style="background:#2E4A7A;color:white;">
+        <th>Course</th>
+        <th>Instructor</th>
+        <th>Class GPA</th>
+        <th>Justification</th>
+        <th>Status</th>
+        <th>Action</th>
+    </tr>
+    {% for flag in flags %}
+    <tr>
+        <td>{{ flag['course_name'] }}</td>
+        <td>{{ flag['instructor_name'] if role == 'registrar' else 'You' }}</td>
+        <td>{{ "%.2f"|format(flag['class_gpa']) }}</td>
+        <td>{{ flag['justification'] or '—' }}</td>
+        <td>{{ flag['status'] | upper }}</td>
+        <td>
+            {% if role == 'instructor' and flag['status'] == 'pending' %}
+                <form method="POST" action="/flagged-gpas/justify/{{ flag['id'] }}">
+                    <input type="text" name="justification" placeholder="Enter justification..." required
+                        style="padding:6px;width:200px;margin-right:6px;">
+                    <button type="submit"
+                        style="background:#2E4A7A;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">
+                        Submit
+                    </button>
+                </form>
+            {% elif role == 'registrar' %}
+                <form method="POST" action="/flagged-gpas/resolve/{{ flag['id'] }}">
+                    <button type="submit" name="decision" value="accept"
+                        style="background:green;color:white;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;margin-right:4px;">
+                        Accept
+                    </button>
+                    <button type="submit" name="decision" value="warn"
+                        style="background:#e67e22;color:white;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;margin-right:4px;">
+                        Warn
+                    </button>
+                    <button type="submit" name="decision" value="terminate"
+                        style="background:#cc0000;color:white;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;">
+                        Terminate
+                    </button>
+                </form>
+            {% else %}
+                —
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+{% endblock %}

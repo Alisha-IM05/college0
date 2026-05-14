@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>College0 - Taboo Words</title>
+    <title>College0 - Taboo Word Manager</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f0f4f8; margin: 0; }
         .navbar {
@@ -10,10 +10,11 @@
             color: white;
             display: flex;
             justify-content: space-between;
+            align-items: center;
         }
         .navbar h1 { margin: 0; font-size: 22px; }
         .navbar a { color: white; text-decoration: none; margin-left: 20px; }
-        .container { padding: 40px; }
+        .container { padding: 40px; max-width: 700px; margin: 0 auto; }
         .box {
             background: white;
             padding: 25px;
@@ -21,39 +22,55 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.08);
             margin-bottom: 25px;
         }
-        h2 { color: #2E4A7A; }
+        h2 { color: #2E4A7A; margin-top: 0; }
         .word-tag {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
             background: #f8d7da;
             color: #721c24;
-            padding: 5px 12px;
+            padding: 6px 14px;
             border-radius: 20px;
             margin: 5px;
             font-size: 14px;
+            font-weight: bold;
         }
-        .word-tag a { color: #721c24; margin-left: 8px; text-decoration: none; font-weight: bold; }
-        input {
+        .word-tag a {
+            color: #721c24;
+            margin-left: 10px;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .word-tag a:hover { color: #4a0f15; }
+        .add-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .add-form input {
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 5px;
             font-size: 14px;
-            width: 250px;
+            width: 260px;
         }
         button {
-            padding: 10px 20px;
+            padding: 10px 22px;
             background-color: #2E4A7A;
             color: white;
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            margin-left: 10px;
+            font-size: 14px;
         }
         button:hover { background-color: #1a3357; }
+        .message { padding: 12px 16px; border-radius: 5px; margin-bottom: 20px; font-weight: bold; }
+        .message.success { background: #d4edda; color: #155724; border-left: 4px solid #28a745; }
+        .message.warning { background: #fff3cd; color: #856404; border-left: 4px solid #ffc107; }
+        .message.error   { background: #f8d7da; color: #721c24; border-left: 4px solid #dc3545; }
+        .word-count { color: #888; font-size: 13px; margin-bottom: 12px; }
+        .no-words { color: #888; font-style: italic; }
     </style>
 </head>
 <body>
     <div class="navbar">
-        <h1>College0 - Taboo Word Manager</h1>
+        <h1>College0 — Taboo Word Manager</h1>
         <div>
             <a href="/dashboard">Dashboard</a>
             <a href="/logout">Logout</a>
@@ -61,27 +78,55 @@
     </div>
 
     <div class="container">
+
+        {% if message %}
+        <div class="message {{ message_type }}">{{ message }}</div>
+        {% endif %}
+
+        <!-- Add a taboo word (H-011, H-013) -->
         <div class="box">
             <h2>Add a Taboo Word</h2>
-            <form method="POST" action="/taboo/add">
-                <input type="text" name="word" placeholder="Enter word to ban" required />
+            <p style="color:#555; font-size:14px;">
+                Words are stored in lowercase and matched using whole-word detection in reviews,
+                so "stupid" won't flag "stupidly" accidentally... wait, actually it will match "stupidly" since it contains "stupid".
+                Use whole words only.
+            </p>
+            <form method="POST" action="/taboo/add" class="add-form">
+                <input type="text" name="word" placeholder="e.g.  hate" />
                 <button type="submit">Add Word</button>
             </form>
         </div>
 
+        <!-- Current taboo word list -->
         <div class="box">
             <h2>Current Taboo Words</h2>
+            <p class="word-count">{{ words | length }} word(s) in the list</p>
             {% if words %}
                 {% for word in words %}
                 <span class="word-tag">
                     {{ word }}
-                    <a href="/taboo/remove/{{ word }}">✕</a>
+                    <a href="/taboo/remove/{{ word }}" title="Remove '{{ word }}'">✕</a>
                 </span>
                 {% endfor %}
             {% else %}
-                <p>No taboo words have been added yet.</p>
+                <p class="no-words">No taboo words have been added yet. Use the form above to add some.</p>
             {% endif %}
         </div>
+
+        <!-- How filtering works (informational) -->
+        <div class="box">
+            <h2>How Review Filtering Works</h2>
+            <ul style="color:#555; font-size:14px; line-height:1.8;">
+                <li><strong>0 taboo words</strong> — review published normally ✅</li>
+                <li><strong>1–2 taboo words</strong> — words replaced with asterisks (***), student gets 1 warning ⚠️</li>
+                <li><strong>3+ taboo words</strong> — review is hidden entirely, student gets 2 warnings 🚫</li>
+            </ul>
+            <p style="color:#888; font-size:13px;">
+                Non-registrar users only ever see the asterisk version — never the original words.
+                As registrar, you can see both the filtered and original text.
+            </p>
+        </div>
+
     </div>
 </body>
 </html>

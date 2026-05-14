@@ -111,26 +111,9 @@ def submit_query(user_id, _session_role, query_text, active_student_id=None):
     if effective_role == "registrar":
         target_student_id = find_student_reference(query_text) or active_student_id
 
-    enrollment_action = parse_enrollment_action(query_text, effective_role, target_student_id)
-    drop_action = parse_drop_action(query_text, effective_role, target_student_id)
-    if enrollment_action:
-        if enrollment_action.get("error"):
-            response_text = enrollment_action["error"]
-            source = "vector_db"
-        else:
-            msg, ok = enroll_from_ai(enrollment_action["student_id"], enrollment_action["course_id"])
-            response_text = msg
-            source = "vector_db"
-    elif drop_action:
-        if drop_action.get("error"):
-            response_text = drop_action["error"]
-            source = "vector_db"
-        else:
-            msg, ok = drop_from_ai(drop_action["student_id"], drop_action["course_id"])
-            response_text = msg
-            source = "vector_db"
-    # K-016/K-019: If a student asks for recommendations, generate them inline
-    elif effective_role == "student" and _is_recommendation_query(query_text):
+    # K-016/K-019/K-025: recommendation questions should be answered before
+    # command parsing so "What else can I register him for?" does not execute.
+    if effective_role == "student" and _is_recommendation_query(query_text):
         recs = generate_recommendations(user_id)
         if recs:
             lines = "\n".join(
@@ -155,11 +138,29 @@ def submit_query(user_id, _session_role, query_text, active_student_id=None):
             response_text = f"No available recommendations were found for {student_name}."
         source = "vector_db"
     else:
-        context = build_role_scoped_ai_context(user_id, effective_role, target_student_id)
-        response_text, source = query_gemini_with_role_context(
-            query_text, effective_role, context
-        )
-
+        enrollment_action = parse_enrollment_action(query_text, effective_role, target_student_id)
+        drop_action = parse_drop_action(query_text, effective_role, target_student_id)
+        if enrollment_action:
+            if enrollment_action.get("error"):
+                response_text = enrollment_action["error"]
+                source = "vector_db"
+            else:
+                msg, ok = enroll_from_ai(enrollment_action["student_id"], enrollment_action["course_id"])
+                response_text = msg
+                source = "vector_db"
+        elif drop_action:
+            if drop_action.get("error"):
+                response_text = drop_action["error"]
+                source = "vector_db"
+            else:
+                msg, ok = drop_from_ai(drop_action["student_id"], drop_action["course_id"])
+                response_text = msg
+                source = "vector_db"
+        else:
+            context = build_role_scoped_ai_context(user_id, effective_role, target_student_id)
+            response_text, source = query_gemini_with_role_context(
+                query_text, effective_role, context
+            )
     # K-013: Scrub taboo words from both sides before logging.
     # query_text was already used for RAG search above (original needed for accuracy).
     # logged_query is the sanitized version stored in ai_queries — DB always matches UI.
@@ -195,8 +196,7 @@ def _is_recommendation_query(query_text):
         "what course should", "which course", "should i take",
         "what classes should", "what class should", "what courses should",
         "what else can i register", "what can i register", "can i register",
-        "available to register", "register him for", "register her for",
-        "register them for",
+        "available to register",
     ]
     return any(kw in q for kw in keywords)
 
@@ -247,8 +247,11 @@ def parse_enrollment_action(query_text, role, active_student_id=None):
         {"student_id":…, "course_id":…} – ready to execute
     """
     q = (query_text or "").lower()
-    enroll_keywords = ("enroll", "register", "sign up", "add him", "add her", "add them", "add me")
-    if not any(word in q for word in enroll_keywords):
+    is_enroll_command = (
+        re.search(r"\b(enroll|register)\b", q) is not None
+        or any(phrase in q for phrase in ("sign up", "add him", "add her", "add them", "add me"))
+    )
+    if not is_enroll_command:
         return None
 
     if role == "student":

@@ -2,8 +2,50 @@
 from database.db import get_db
 
 
-PERIOD_ORDER = ['setup', 'registration', 'running', 'grading']
+PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
 GPA_MAP = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
+
+
+def get_current_semester():
+    """Returns the active semester — newest non-completed semester first."""
+    conn = get_db()
+    try:
+        return conn.execute(
+            """SELECT * FROM semesters
+               ORDER BY CASE current_period
+                   WHEN 'grading' THEN 5
+                   WHEN 'running' THEN 4
+                   WHEN 'special_registration' THEN 3
+                   WHEN 'registration' THEN 2
+                   WHEN 'setup' THEN 1
+               END ASC, id DESC LIMIT 1"""
+        ).fetchone()
+    finally:
+        conn.close()
+
+def get_current_period():
+    """Returns the current period string, or None."""
+    sem = get_current_semester()
+    return sem['current_period'] if sem else None
+
+def get_active_semester():
+    """Returns the newest semester that still has work to do (not grading-completed)."""
+    conn = get_db()
+    try:
+        # Prefer any semester not in grading, newest first
+        result = conn.execute(
+            """SELECT * FROM semesters
+               WHERE current_period != 'grading'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        # If all semesters are in grading, just return the newest
+        if result is None:
+            result = conn.execute(
+                "SELECT * FROM semesters ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return result
+    finally:
+        conn.close()
 
 
 # Move a semester to the next period.
@@ -12,17 +54,13 @@ GPA_MAP = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
 def advance_period(semester_id):
     conn = get_db()
     try:
-        # Get the semester from the database
         semester = conn.execute(
             "SELECT * FROM semesters WHERE id = ?",
             (semester_id,)
         ).fetchone()
-        # If no semester was found, stop here
         if semester is None:
             return "Semester not found"
-        # Get the current period for this semester
         current_period = semester["current_period"]
-        # If the semester is already in the last period, create a new semester
         if current_period == "grading":
             current_name = semester["name"]
             if "Spring" in current_name:
@@ -31,35 +69,67 @@ def advance_period(semester_id):
             else:
                 year = int(current_name.split(" ")[1])
                 new_name = f"Spring {year + 1}"
-            conn.execute(
-                "INSERT INTO semesters (name, current_period) VALUES (?, 'setup')",
-                (new_name,)
-            )
+            # Warn instructors who didn't submit all grades
+            courses_this_semester = conn.execute(
+                """SELECT * FROM courses
+                   WHERE semester_id = ? AND status = 'active'""",
+                (semester_id,)
+            ).fetchall()
+            for course in courses_this_semester:
+                enrolled_students = conn.execute(
+                    """SELECT student_id FROM enrollments
+                       WHERE course_id = ? AND status = 'enrolled'""",
+                    (course['id'],)
+                ).fetchall()
+                for student in enrolled_students:
+                    grade = conn.execute(
+                        """SELECT * FROM grades
+                           WHERE student_id = ? AND course_id = ?""",
+                        (student['student_id'], course['id'])
+                    ).fetchone()
+                    if grade is None:
+                        conn.execute(
+                            """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
+                            (
+                                course['instructor_id'],
+                                f'You did not submit all grades for {course["course_name"]} before the grading period ended'
+                            )
+                        )
+                        break  # one warning per course is enough
+            conn.commit()
+            # Reset special_registration for all students
+            conn.execute("UPDATE students SET special_registration = 0")
+            # Check if next semester already exists — don't create a duplicate
+            existing = conn.execute(
+                "SELECT * FROM semesters WHERE name = ?", (new_name,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE semesters SET current_period = 'setup' WHERE id = ?",
+                    (existing['id'],)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO semesters (name, current_period) VALUES (?, 'setup')",
+                    (new_name,)
+                )
             conn.commit()
             return f"New semester {new_name} created in setup period"
-        # Find the current period's position in the list
         current_index = PERIOD_ORDER.index(current_period)
-        # Move to the next period in the list
         next_period = PERIOD_ORDER[current_index + 1]
-        # Update the semester's current period
         conn.execute(
             "UPDATE semesters SET current_period = ? WHERE id = ?",
             (next_period, semester_id)
         )
-        # Record when this new period started
-        conn.execute( 
-            """
-            INSERT INTO semester_periods (semester_id, period_name, start_date)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            """,
+        conn.execute(
+            """INSERT INTO semester_periods (semester_id, period_name, start_date)
+               VALUES (?, ?, CURRENT_TIMESTAMP)""",
             (semester_id, next_period)
         )
-        # Save the database changes
         conn.commit()
         return next_period
     finally:
         conn.close()
-
 
 # Create a new course for a semester
 # Only allowed during the setup period
@@ -158,19 +228,18 @@ def register_student(student_id, course_id):
         # Count how many courses the student is enrolled in THIS semester only
         enrolled_count = conn.execute(
             """SELECT COUNT(*) as count FROM enrollments e
-               JOIN courses c ON e.course_id = c.id
-               JOIN semesters s ON c.semester_id = s.id
-               WHERE e.student_id = ? AND e.status = 'enrolled'
-               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
-            (student_id,)
+            JOIN courses c ON e.course_id = c.id
+            WHERE e.student_id = ? AND e.status = 'enrolled'
+            AND c.semester_id = (SELECT semester_id FROM courses WHERE id = ?)""",
+            (student_id, course_id)
         ).fetchone()['count']
-        # Count waitlisted courses in THIS semester only
+
         waitlist_count = conn.execute(
             """SELECT COUNT(*) as count FROM waitlist w
-               JOIN courses c ON w.course_id = c.id
-               WHERE w.student_id = ?
-               AND c.semester_id = (SELECT id FROM semesters ORDER BY id DESC LIMIT 1)""",
-            (student_id,)
+            JOIN courses c ON w.course_id = c.id
+            WHERE w.student_id = ?
+            AND c.semester_id = (SELECT semester_id FROM courses WHERE id = ?)""",
+            (student_id, course_id)
         ).fetchone()['count']
         # Check max course limit (4) — enrolled + waitlisted combined
         if enrolled_count + waitlist_count >= 4:
@@ -183,6 +252,15 @@ def register_student(student_id, course_id):
         # Only allow retake if previous grade was F
         if past_grade and past_grade['letter_grade'] != 'F':
             return 'Student cannot retake a course without a prior F grade'
+        # Check for missing time slot data — treat as unsafe
+        new_course = conn.execute(
+            "SELECT day_of_week, start_time, end_time FROM courses WHERE id = ?",
+            (course_id,)
+        ).fetchone()
+        if new_course and (new_course['day_of_week'] is None or 
+                        new_course['start_time'] is None or 
+                        new_course['end_time'] is None):
+            return 'Cannot register — course time slot data is incomplete. Contact the registrar.'
         # Check for time conflicts
         conflict_course = get_conflict_course(student_id, course_id, conn)
         if conflict_course:
@@ -257,8 +335,8 @@ def get_conflict_course(student_id, course_id, conn=None):
                FROM courses c
                JOIN enrollments e ON c.id = e.course_id
                WHERE e.student_id = ? AND e.status = 'enrolled'
-               AND c.semester_id = (SELECT id FROM semesters ORDER BY id ASC LIMIT 1)""",
-            (student_id,)
+               AND c.semester_id = (SELECT semester_id FROM courses WHERE id = ?)""",
+            (student_id, course_id)
         ).fetchall()
         new_days = set(new_course['time_slot'].split('/'))
         for course in existing:
@@ -291,8 +369,8 @@ def check_conflict(student_id, course_id):
                FROM courses c
                JOIN enrollments e ON c.id = e.course_id
                WHERE e.student_id = ? AND e.status = 'enrolled'
-               AND c.semester_id = (SELECT id FROM semesters ORDER BY id ASC LIMIT 1)""",
-            (student_id,)
+               AND c.semester_id = (SELECT semester_id FROM courses WHERE id = ?)""",
+            (student_id, course_id)
         ).fetchall()
         for course in existing:
             if course['day_of_week'] is None:
@@ -385,6 +463,19 @@ def admit_from_waitlist(course_id, student_id, instructor_id=None):
         ).fetchone()
         if waitlist_entry is None:
             return 'Student is not on the waitlist for this course'
+        already_enrolled = conn.execute(
+            """SELECT * FROM enrollments
+            WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+            (student_id, course_id)
+        ).fetchone()
+        if already_enrolled:
+            return 'Student is already enrolled in this course'
+        # Instructors can override capacity — increase AFTER validation
+        conn.execute(
+            "UPDATE courses SET capacity = capacity + 1 WHERE id = ?",
+            (course_id,)
+        )
+  
         # Remove the student from the waitlist
         conn.execute(
             "DELETE FROM waitlist WHERE student_id = ? AND course_id = ?",
@@ -499,27 +590,57 @@ def enforce_minimums(semester_id):
                     (instructor['instructor_id'],)
                 )
         # Open special registration again
-        conn.execute(
-            """
-            UPDATE semesters
-            SET current_period = 'registration'
-            WHERE id = ?
-            """,
+        cancelled_courses = conn.execute(
+            """SELECT * FROM courses
+               WHERE semester_id = ? AND status = 'cancelled'""",
             (semester_id,)
-        )
-        # Warn students whose courses were cancelled
-        warn_underenrolled_students(semester_id)
-        # Save all changes
+        ).fetchall()
+        cancelled_count = len(cancelled_courses)
+
+        # NOW safe to use cancelled_count
+        if cancelled_count > 0:
+            conn.execute(
+                """UPDATE semesters
+                   SET current_period = 'special_registration'
+                   WHERE id = ?""",
+                (semester_id,)
+            )
+
+        warn_underenrolled_students(semester_id, conn)
+        affected_students = conn.execute(
+            """SELECT DISTINCT e.student_id
+               FROM enrollments e
+               JOIN courses c ON e.course_id = c.id
+               WHERE c.semester_id = ? AND e.status = 'cancelled'""",
+            (semester_id,)
+        ).fetchall()
+        for s in affected_students:
+            conn.execute(
+                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
+                (s['student_id'],
+                 'One or more of your courses was cancelled. Special registration is now open for you.')
+            )
+
+        affected_count = len(affected_students)
         conn.commit()
-        return 'Minimum enrollment rules enforced successfully'
+
+        if cancelled_count == 0:
+            return 'Semester advanced to running. No courses were cancelled.'
+        else:
+            return (f'Semester advanced to running. '
+                    f'{cancelled_count} course(s) cancelled due to low enrollment. '
+                    f'{affected_count} student(s) given special registration.')
     finally:
         conn.close()
 
 # Warn students who are enrolled in fewer than 2 active courses
 # Only checks students in the given semester
 # Returns nothing (just updates the database)
-def warn_underenrolled_students(semester_id):
-    conn = get_db()
+def warn_underenrolled_students(semester_id, conn=None):
+    close = False
+    if conn is None:
+        conn = get_db()
+        close = True
     try:
         # Get all students who are enrolled in at least one course this semester
         students = conn.execute(
@@ -558,9 +679,10 @@ def warn_underenrolled_students(semester_id):
                         'You are enrolled in fewer than 2 courses this semester'
                     )
                 )
-        conn.commit()
+            conn.commit()
     finally:
-        conn.close()
+        if close:
+            conn.close()
 
 
 # Submit a grade for a student
@@ -631,6 +753,16 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
                 """,
                 (letter_grade, numeric_grade, student_id, course_id)
             )
+            if existing_grade['letter_grade'] == 'F' and letter_grade != 'F':
+                conn.execute(
+                    "UPDATE students SET credits_earned = credits_earned + 1 WHERE id = ?",
+                    (student_id,)
+                )
+            elif existing_grade['letter_grade'] != 'F' and letter_grade == 'F':
+                conn.execute(
+                    "UPDATE students SET credits_earned = credits_earned - 1 WHERE id = ?",
+                    (student_id,)
+                )
         # If no grade exists yet, insert a new grade
         else:
             conn.execute(
@@ -648,7 +780,8 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
                 )
         conn.commit()
         # Recalculate GPA after saving the grade
-        calculate_gpa(student_id)
+        calculate_gpa(student_id, semester['id'])
+
 
         # Flag instructor if class GPA is above 3.5 or below 2.5
         class_gpa = conn.execute(
@@ -662,16 +795,17 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
 
         if class_gpa is not None:
             if class_gpa > 3.5 or class_gpa < 2.5:
-                conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
-                    (
-                        instructor_id,
-                        f'Your course GPA of {class_gpa:.2f} has been flagged for registrar review (outside 2.5–3.5 range)'
+                # Check if already flagged for this course
+                already_flagged = conn.execute(
+                    "SELECT id FROM flagged_course_gpas WHERE course_id = ? AND status = 'pending'",
+                    (course_id,)
+                ).fetchone()
+                if not already_flagged:
+                    conn.execute(
+                        """INSERT INTO flagged_course_gpas (course_id, instructor_id, class_gpa)
+                        VALUES (?, ?, ?)""",
+                        (course_id, instructor_id, class_gpa)
                     )
-                )
                 conn.commit()
 
         return 'Grade submitted successfully'
@@ -681,49 +815,44 @@ def submit_grade(instructor_id, student_id, course_id, letter_grade):
 # Recalculate a student's semester GPA and cumulative GPA
 # Updates the students table
 # Also checks the student's academic standing
-def calculate_gpa(student_id):
+def calculate_gpa(student_id, semester_id=None):
     conn = get_db()
     try:
-        # Get all grades for this student
         grades = conn.execute(
             "SELECT * FROM grades WHERE student_id = ?",
             (student_id,)
         ).fetchall()
-        # If the student has no grades, there is nothing to calculate
         if not grades:
             return
-        # Get this student's current semester grades
+        # Use provided semester_id, or fall back to the one currently in grading
+        if semester_id is None:
+            sem_row = conn.execute(
+                """SELECT id FROM semesters WHERE current_period = 'grading'
+                   ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
+            semester_id = sem_row['id'] if sem_row else None
+        if semester_id is None:
+            return
         current_semester_grades = conn.execute(
-            """
-            SELECT g.numeric_value
-            FROM grades g
-            JOIN courses c ON g.course_id = c.id
-            JOIN semesters s ON c.semester_id = s.id
-            WHERE g.student_id = ?
-            AND s.current_period = 'grading'
-            """,
-            (student_id,)
+            """SELECT g.numeric_value
+               FROM grades g
+               JOIN courses c ON g.course_id = c.id
+               WHERE g.student_id = ? AND c.semester_id = ?""",
+            (student_id, semester_id)
         ).fetchall()
-        # If there are no current semester grades, avoid dividing by zero
         if not current_semester_grades:
             return
-        # Calculate semester GPA
-        semester_total = sum(grade['numeric_value'] for grade in current_semester_grades)
+        semester_total = sum(g['numeric_value'] for g in current_semester_grades)
         semester_gpa = semester_total / len(current_semester_grades)
-        # Calculate cumulative GPA using all grades
-        cumulative_total = sum(grade['numeric_value'] for grade in grades)
+        cumulative_total = sum(g['numeric_value'] for g in grades)
         cumulative_gpa = cumulative_total / len(grades)
-        # Update the student record with the new GPAs
         conn.execute(
-            """
-            UPDATE students
-            SET semester_gpa = ?, cumulative_gpa = ?
-            WHERE id = ?
-            """,
+            """UPDATE students
+               SET semester_gpa = ?, cumulative_gpa = ?
+               WHERE id = ?""",
             (semester_gpa, cumulative_gpa, student_id)
         )
         conn.commit()
-        # Update academic standing based on GPA
         update_academic_standing(student_id, semester_gpa, cumulative_gpa)
     finally:
         conn.close()
@@ -769,10 +898,7 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
                     'GPA between 2.0 and 2.25 — probation interview required'
                 )
             )
-            conn.execute(
-                "UPDATE users SET status = 'probation' WHERE id = ?",
-                (student_id,)
-            )
+
         # Count how many semesters this student has grades for
         semester_count = conn.execute(
             """
@@ -845,52 +971,54 @@ def apply_for_graduation(student_id):
 def resolve_graduation(application_id, approved):
     conn = get_db()
     try:
-        # Get the graduation application
         application = conn.execute(
             "SELECT * FROM graduation_applications WHERE id = ?",
             (application_id,)
         ).fetchone()
-        # Check if the application exists
         if application is None:
             return 'Application not found'
-        # Make sure the application has not already been approved or rejected
         if application['status'] != 'pending':
             return 'Application has already been resolved'
-        # If registrar approves the application
+
         if approved:
+            # Verify student has 8 passed, non-cancelled courses
+            completed = conn.execute(
+                """SELECT COUNT(*) as count FROM grades g
+                   JOIN enrollments e ON g.student_id = e.student_id 
+                       AND g.course_id = e.course_id
+                   WHERE g.student_id = ?
+                   AND g.letter_grade != 'F'
+                   AND e.status = 'enrolled'""",
+                (application['student_id'],)
+            ).fetchone()['count']
+            if completed < 8:
+                return f'Cannot approve — student has only completed {completed} of 8 required courses'
+
             conn.execute(
-                """
-                UPDATE graduation_applications
-                SET status = 'approved',
-                    resolved_at = CURRENT_TIMESTAMP,
-                    registrar_notes = 'Bachelor''s degree awarded'
-                WHERE id = ?
-                """,
+                """UPDATE graduation_applications
+                   SET status = 'approved',
+                       resolved_at = CURRENT_TIMESTAMP,
+                       registrar_notes = 'Bachelor''s degree awarded'
+                   WHERE id = ?""",
                 (application_id,)
             )
-            # Mark student as graduated
             conn.execute(
                 "UPDATE users SET role = 'graduated' WHERE id = ?",
                 (application['student_id'],)
             )
             conn.commit()
             return 'Student has been graduated and removed from the system'
-        # If registrar rejects the application
         else:
             conn.execute(
-                """
-                UPDATE graduation_applications
-                SET status = 'rejected',
-                    resolved_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
+                """UPDATE graduation_applications
+                   SET status = 'rejected',
+                       resolved_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
                 (application_id,)
             )
             conn.execute(
-                """
-                INSERT INTO warnings (user_id, reason)
-                VALUES (?, ?)
-                """,
+                """INSERT INTO warnings (user_id, reason)
+                   VALUES (?, ?)""",
                 (
                     application['student_id'],
                     'Reckless graduation application — required courses not covered'
@@ -898,5 +1026,118 @@ def resolve_graduation(application_id, approved):
             )
             conn.commit()
             return 'Application rejected. Warning issued to student'
+    finally:
+        conn.close()
+        
+def use_honor_roll_to_remove_warning(student_id, warning_id):
+    conn = get_db()
+    try:
+        # Check student has unused honor roll distinctions
+        student = conn.execute(
+            "SELECT * FROM students WHERE id = ?",
+            (student_id,)
+        ).fetchone()
+        if student is None:
+            return 'Student not found'
+        if student['honor_roll'] <= 0:
+            return 'No honor roll distinctions available to use'
+        # Check the warning exists and belongs to this student
+        warning = conn.execute(
+            "SELECT * FROM warnings WHERE id = ? AND user_id = ?",
+            (warning_id, student_id)
+        ).fetchone()
+        if warning is None:
+            return 'Warning not found'
+        # Remove the warning
+        conn.execute(
+            "DELETE FROM warnings WHERE id = ?",
+            (warning_id,)
+        )
+        # Use up one honor roll distinction
+        conn.execute(
+            "UPDATE students SET honor_roll = honor_roll - 1 WHERE id = ?",
+            (student_id,)
+        )
+        conn.commit()
+        return 'Warning removed using honor roll distinction'
+    finally:
+        conn.close()
+        
+        
+def submit_gpa_justification(instructor_id, flag_id, justification):
+    conn = get_db()
+    try:
+        flag = conn.execute(
+            "SELECT * FROM flagged_course_gpas WHERE id = ? AND instructor_id = ?",
+            (flag_id, instructor_id)
+        ).fetchone()
+        if flag is None:
+            return 'Flag not found or not assigned to you'
+        if flag['status'] != 'pending':
+            return 'This flag has already been resolved'
+        conn.execute(
+            """UPDATE flagged_course_gpas
+               SET justification = ?, status = 'justified'
+               WHERE id = ?""",
+            (justification, flag_id)
+        )
+        conn.commit()
+        return 'Justification submitted successfully'
+    finally:
+        conn.close()
+
+
+def resolve_gpa_flag(registrar_id, flag_id, decision):
+    """
+    decision: 'accept', 'warn', or 'terminate'
+    """
+    conn = get_db()
+    try:
+        flag = conn.execute(
+            "SELECT * FROM flagged_course_gpas WHERE id = ?",
+            (flag_id,)
+        ).fetchone()
+        if flag is None:
+            return 'Flag not found'
+        if flag['status'] not in ['pending', 'justified']:
+            return 'This flag has already been resolved'
+        if decision == 'accept':
+            conn.execute(
+                """UPDATE flagged_course_gpas
+                   SET status = 'justified', resolved_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (flag_id,)
+            )
+            conn.commit()
+            return 'Justification accepted — no penalty issued'
+        elif decision == 'warn':
+            conn.execute(
+                """UPDATE flagged_course_gpas
+                   SET status = 'warned', resolved_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (flag_id,)
+            )
+            conn.execute(
+                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
+                (flag['instructor_id'],
+                 f'Inadequate justification for flagged class GPA of {flag["class_gpa"]:.2f}')
+            )
+            conn.commit()
+            return 'Warning issued to instructor'
+        elif decision == 'terminate':
+            conn.execute(
+                """UPDATE flagged_course_gpas
+                   SET status = 'terminated', resolved_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (flag_id,)
+            )
+            conn.execute(
+                "UPDATE users SET status = 'terminated' WHERE id = ?",
+                (flag['instructor_id'],)
+            )
+            conn.commit()
+            return 'Instructor terminated'
+        else:
+            return 'Invalid decision'
     finally:
         conn.close()
