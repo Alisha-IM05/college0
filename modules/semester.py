@@ -262,8 +262,13 @@ def register_student(student_id, course_id):
             return 'Student has reached the maximum of 4 courses (enrolled + waitlisted combined)'
         # Check if student has taken this course before
         past_grade = conn.execute(
-            "SELECT * FROM grades WHERE student_id = ? AND course_id = ?",
-            (student_id, course_id)
+            """SELECT g.letter_grade FROM grades g
+               JOIN courses c1 ON g.course_id = c1.id
+               JOIN courses c2 ON c2.id = ?
+               WHERE g.student_id = ?
+               AND c1.course_name = c2.course_name
+               ORDER BY g.id DESC LIMIT 1""",
+            (course_id, student_id)
         ).fetchone()
         # Only allow retake if previous grade was F
         if past_grade and past_grade['letter_grade'] != 'F':
