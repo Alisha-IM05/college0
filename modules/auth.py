@@ -10,185 +10,27 @@ Covers UC-07 through UC-13:
     UC-12  User logs in with role-based access control
     UC-13  Student or instructor account is suspended or terminated
 
-Clerk is used both for the visitor-facing application flow (sign-up + status
-check) and as the front door for approved users on the main login page: an
-approved user signs in with the same Clerk account they used when applying,
-the JWT is verified server-side, and a Flask session is opened against the
-matching `users.clerk_user_id` row. UC-10/UC-11 are unchanged — the user is
-still issued a temporary password and forced through /change-password on
-first login.
+Visitors apply without third-party identity. Submitting an application creates a
+provisional `users` row (`applicant_only=1`) with a temporary password; **username and
+temporary password are shown on the website** at `/apply/status?token=…` (save that link).
+Signed-in users can also load applications by email match. The registrar approves by
+clearing `applicant_only` and adding `students` when applicable (password unchanged);
+reject deletes the provisional user so the same email can apply again.
 """
 
 from __future__ import annotations
 
-import os
+import logging
+import re
 import secrets
 from functools import wraps
 from typing import Optional
 
-from flask import redirect, request, session, url_for
+from flask import redirect, session, url_for
 
 from database.db import get_db
 
-
-# ── CLERK (visitor sessions only) ────────────────────────────────────────────
-
-_clerk_sdk = None
-
-
-def _get_clerk_sdk():
-    """Lazily build the Clerk SDK client. Returns None if no secret key is set
-    so the app still boots for non-Clerk routes during local development."""
-    global _clerk_sdk
-    if _clerk_sdk is not None:
-        return _clerk_sdk
-
-    secret_key = os.environ.get("CLERK_SECRET_KEY")
-    if not secret_key:
-        return None
-
-    try:
-        from clerk_backend_api import Clerk  # type: ignore
-    except ImportError:
-        return None
-
-    _clerk_sdk = Clerk(bearer_auth=secret_key)
-    return _clerk_sdk
-
-
-def verify_clerk_session(flask_request) -> Optional[str]:
-    """Validate the Clerk session attached to a Flask request and return the
-    Clerk user id (`sub` claim) when signed in, otherwise None.
-
-    The Clerk frontend SDK puts the session JWT in either the `__session`
-    cookie or an `Authorization: Bearer <jwt>` header; the Python SDK reads
-    both automatically.
-    """
-    sdk = _get_clerk_sdk()
-    if sdk is None:
-        return None
-
-    try:
-        from clerk_backend_api.security.types import AuthenticateRequestOptions  # type: ignore
-    except ImportError:
-        return None
-
-    authorized_parties = [
-        p.strip()
-        for p in os.environ.get(
-            "CLERK_AUTHORIZED_PARTIES",
-            "http://localhost:5000,http://127.0.0.1:5000",
-        ).split(",")
-        if p.strip()
-    ]
-
-    try:
-        state = sdk.authenticate_request(
-            flask_request,
-            AuthenticateRequestOptions(authorized_parties=authorized_parties),
-        )
-    except Exception:
-        return None
-
-    if not getattr(state, "is_signed_in", False):
-        return None
-
-    payload = getattr(state, "payload", None) or {}
-    return payload.get("sub")
-
-
-def find_user_by_clerk_id(clerk_user_id: str):
-    """Return the `users` row whose Clerk identity matches, or None."""
-    if not clerk_user_id:
-        return None
-    conn = get_db()
-    try:
-        return conn.execute(
-            "SELECT * FROM users WHERE clerk_user_id = ?", (clerk_user_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-
-
-def _has_pending_application(clerk_user_id: str) -> bool:
-    if not clerk_user_id:
-        return False
-    conn = get_db()
-    try:
-        row = conn.execute(
-            """SELECT 1 FROM applications
-               WHERE clerk_user_id = ? AND status = 'pending' LIMIT 1""",
-            (clerk_user_id,),
-        ).fetchone()
-        return row is not None
-    finally:
-        conn.close()
-
-
-def establish_clerk_session(flask_request) -> dict:
-    """Bridge a verified Clerk session into the Flask session shape used by
-    `@require_role` and `enforce_password_change`. Returns a result dict the
-    /auth/clerk-login route can act on:
-
-        { ok: True,  user: <Row>,  redirect: '/dashboard' | '/change-password',
-          must_change_password: bool }
-
-        { ok: False, status: 'not_signed_in' | 'no_account' | 'pending'
-                             | 'suspended' | 'terminated',
-          error: '<human message>', redirect: '<optional next page>' }
-
-    UC-10/UC-11 behaviour is preserved: when the linked user still has
-    `must_change_password = 1`, the caller redirects to /change-password just
-    like `POST /login` does today.
-    """
-    clerk_user_id = verify_clerk_session(flask_request)
-    if not clerk_user_id:
-        return {
-            "ok": False,
-            "status": "not_signed_in",
-            "error": "Clerk session could not be verified. Please sign in again.",
-        }
-
-    user = find_user_by_clerk_id(clerk_user_id)
-    if user is None:
-        if _has_pending_application(clerk_user_id):
-            return {
-                "ok": False,
-                "status": "pending",
-                "error": "Your application is still pending review.",
-                "redirect": url_for("apply_status"),
-            }
-        return {
-            "ok": False,
-            "status": "no_account",
-            "error": "No account is linked to this Clerk identity yet. "
-                     "Submit an application to get started.",
-            "redirect": url_for("apply_page"),
-        }
-
-    if user["status"] == "suspended":
-        return {
-            "ok": False,
-            "status": "suspended",
-            "error": "Your account is suspended. Please contact the registrar.",
-        }
-    if user["status"] == "terminated":
-        return {
-            "ok": False,
-            "status": "terminated",
-            "error": "Your account has been terminated. Please contact the registrar.",
-        }
-
-    must_change = bool(user["must_change_password"])
-    redirect_target = url_for(
-        "change_password_page" if must_change else "dashboard"
-    )
-    return {
-        "ok": True,
-        "user": user,
-        "must_change_password": must_change,
-        "redirect": redirect_target,
-    }
+from modules.mail import send_application_rejected_email
 
 
 # ── UC-07 / UC-08: visitor submits an application ────────────────────────────
@@ -199,68 +41,73 @@ def submit_application(
     last_name: str,
     email: str,
     role_applied: str,
-    clerk_user_id: Optional[str],
-) -> tuple[bool, str]:
-    """Insert a pending application for a visitor.
-
-    Both `first_name` and `last_name` are mandatory; they are combined into
-    a single `name` for storage so the existing `applications.name` column
-    remains the source of truth. Returns (ok, message). Refuses duplicate
-    pending applications from the same Clerk user so a refresh-spammer
-    can't flood the registrar inbox.
-    """
+) -> tuple[bool, str, Optional[str]]:
+    """Insert a pending application and provisional user. Returns (ok, message, view_token)."""
     first_name = (first_name or "").strip()
     last_name = (last_name or "").strip()
     email = (email or "").strip().lower()
 
     if not first_name:
-        return False, "Please enter your first name."
+        return False, "Please enter your first name.", None
     if not last_name:
-        return False, "Please enter your last name."
+        return False, "Please enter your last name.", None
     if not email or "@" not in email:
-        return False, "Please enter a valid email address."
+        return False, "Please enter a valid email address.", None
     if role_applied not in ("student", "instructor"):
-        return False, "Role must be either 'student' or 'instructor'."
+        return False, "Role must be either 'student' or 'instructor'.", None
 
     name = f"{first_name} {last_name}"
+    view_token = secrets.token_urlsafe(24)
 
     conn = get_db()
     try:
-        if clerk_user_id:
-            existing = conn.execute(
-                """SELECT id FROM applications
-                   WHERE clerk_user_id = ? AND status = 'pending'""",
-                (clerk_user_id,),
-            ).fetchone()
-            if existing:
-                return False, "You already have a pending application."
+        existing_pending = conn.execute(
+            """SELECT id FROM applications
+               WHERE LOWER(email) = ? AND status = 'pending'""",
+            (email,),
+        ).fetchone()
+        if existing_pending:
+            return False, "You already have a pending application with this email.", None
 
         existing_user = conn.execute(
-            "SELECT id FROM users WHERE email = ?", (email,)
+            "SELECT id FROM users WHERE LOWER(email) = ?", (email,)
         ).fetchone()
         if existing_user:
-            return False, "An account with that email already exists. Try logging in."
+            return False, "An account with that email already exists. Try logging in.", None
 
-        conn.execute(
-            """INSERT INTO applications (name, email, role_applied, clerk_user_id)
-               VALUES (?, ?, ?, ?)""",
-            (name, email, role_applied, clerk_user_id),
-        )
-        conn.commit()
-        return True, "Application submitted! The registrar will review it shortly."
+        username = _generate_username(conn, name)
+        temp_password = secrets.token_urlsafe(8)
+
+        with conn:
+            conn.execute(
+                """INSERT INTO applications (name, email, role_applied, clerk_user_id, view_token)
+                   VALUES (?, ?, ?, NULL, ?)""",
+                (name, email, role_applied, view_token),
+            )
+            conn.execute(
+                """INSERT INTO users
+                       (username, email, password, role, status, must_change_password,
+                        clerk_user_id, applicant_only)
+                   VALUES (?, ?, ?, ?, 'active', 1, NULL, 1)""",
+                (username, email, temp_password, role_applied),
+            )
     finally:
         conn.close()
 
+    return (
+        True,
+        "Application submitted! Your username and temporary password are on the next page — save your status link.",
+        view_token,
+    )
 
-def get_applications_for_clerk_user(clerk_user_id: str) -> list:
-    """Return all applications submitted by a given Clerk user, most recent
-    first. Joined with `users` so an approved application can also surface
-    the issued username and (while still required) the temp password."""
-    if not clerk_user_id:
+
+def get_applications_for_view_token(view_token: str) -> list:
+    """Return 0–1 application rows for a secret status token (joined with users)."""
+    if not view_token or not view_token.strip():
         return []
     conn = get_db()
     try:
-        rows = conn.execute(
+        return conn.execute(
             """SELECT a.id, a.name, a.email, a.role_applied, a.status,
                       a.submitted_at, a.reviewed_at,
                       u.id AS user_id,
@@ -270,11 +117,34 @@ def get_applications_for_clerk_user(clerk_user_id: str) -> list:
                           AS issued_temp_password
                FROM applications a
                LEFT JOIN users u ON LOWER(u.email) = LOWER(a.email)
-               WHERE a.clerk_user_id = ?
+               WHERE a.view_token = ?
                ORDER BY a.submitted_at DESC""",
-            (clerk_user_id,),
+            (view_token.strip(),),
         ).fetchall()
-        return rows
+    finally:
+        conn.close()
+
+
+def get_applications_for_user_id(user_id: int) -> list:
+    """Applications whose email matches the signed-in user's email (same columns as token query)."""
+    if not user_id:
+        return []
+    conn = get_db()
+    try:
+        return conn.execute(
+            """SELECT a.id, a.name, a.email, a.role_applied, a.status,
+                      a.submitted_at, a.reviewed_at,
+                      u.id AS user_id,
+                      u.username AS issued_username,
+                      u.must_change_password,
+                      CASE WHEN u.must_change_password = 1 THEN u.password ELSE NULL END
+                          AS issued_temp_password
+               FROM applications a
+               LEFT JOIN users u ON LOWER(u.email) = LOWER(a.email)
+               WHERE LOWER(a.email) = (SELECT LOWER(email) FROM users WHERE id = ?)
+               ORDER BY a.submitted_at DESC""",
+            (user_id,),
+        ).fetchall()
     finally:
         conn.close()
 
@@ -305,38 +175,34 @@ def list_all_applications() -> list:
         conn.close()
 
 
-def _generate_username(conn, role: str) -> str:
-    """Build a fresh, collision-free username of the form `<role><n>`."""
-    row = conn.execute(
-        """SELECT username FROM users
-           WHERE role = ? AND username GLOB ?
-           ORDER BY id DESC LIMIT 1""",
-        (role, f"{role}*"),
-    ).fetchone()
+def _first_name_slug(full_name: str) -> str:
+    first = (full_name or "").strip().split()[0] if (full_name or "").strip() else "user"
+    slug = re.sub(r"[^a-z0-9]+", "", first.lower())
+    if not slug:
+        slug = "user"
+    if slug[0].isdigit():
+        slug = "u" + slug
+    return slug[:32]
 
-    base_n = 1
-    if row:
-        suffix = row["username"][len(role):]
-        if suffix.isdigit():
-            base_n = int(suffix) + 1
 
-    candidate = f"{role}{base_n}"
-    while conn.execute(
-        "SELECT 1 FROM users WHERE username = ?", (candidate,)
-    ).fetchone():
-        base_n += 1
-        candidate = f"{role}{base_n}"
-    return candidate
+def _generate_username(conn, full_name: str) -> str:
+    """Collision-free username derived from the applicant's first name."""
+    base = _first_name_slug(full_name)
+    n = 0
+    while True:
+        candidate = base if n == 0 else f"{base}{n}"
+        if not conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", (candidate,)
+        ).fetchone():
+            return candidate
+        n += 1
 
 
 # ── UC-10: issue ID + temporary password ─────────────────────────────────────
 
 
 def approve_application(application_id: int) -> dict:
-    """Approve a pending application, create the corresponding `users` row
-    with a temp password and `must_change_password=1`, and link the student
-    row when appropriate. Returns the credentials so the registrar can show
-    them to the new user (UC-10)."""
+    """Approve pending application: activate user (no password change, no email)."""
     conn = get_db()
     try:
         app = conn.execute(
@@ -347,37 +213,33 @@ def approve_application(application_id: int) -> dict:
         if app["status"] != "pending":
             return {"ok": False, "message": f"Application is already {app['status']}."}
 
-        existing = conn.execute(
-            "SELECT id FROM users WHERE email = ?", (app["email"],)
+        urow = conn.execute(
+            """SELECT id, username, email, role, applicant_only
+               FROM users WHERE LOWER(email) = LOWER(?)""",
+            (app["email"],),
         ).fetchone()
-        if existing:
+        if not urow:
             return {
                 "ok": False,
-                "message": "A user with that email already exists; cannot approve.",
+                "message": "No account found for this applicant. They may need to submit again.",
+            }
+        if int(urow["applicant_only"] or 0) != 1:
+            return {
+                "ok": False,
+                "message": "This applicant is already fully activated or the account is not provisional.",
             }
 
-        username = _generate_username(conn, app["role_applied"])
-        temp_password = secrets.token_urlsafe(8)
+        user_id = urow["id"]
+        username = urow["username"]
 
-        cur = conn.execute(
-            """INSERT INTO users
-                   (username, email, password, role, status, must_change_password, clerk_user_id)
-               VALUES (?, ?, ?, ?, 'active', 1, ?)""",
-            (
-                username,
-                app["email"],
-                temp_password,
-                app["role_applied"],
-                app["clerk_user_id"],
-            ),
+        conn.execute(
+            "UPDATE users SET applicant_only = 0 WHERE id = ?",
+            (user_id,),
         )
-        new_user_id = cur.lastrowid
-
         if app["role_applied"] == "student":
             conn.execute(
-                "INSERT OR IGNORE INTO students (id) VALUES (?)", (new_user_id,)
+                "INSERT OR IGNORE INTO students (id) VALUES (?)", (user_id,)
             )
-
         conn.execute(
             """UPDATE applications
                SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP
@@ -389,9 +251,8 @@ def approve_application(application_id: int) -> dict:
         return {
             "ok": True,
             "message": "Application approved.",
-            "user_id": new_user_id,
+            "user_id": user_id,
             "username": username,
-            "temp_password": temp_password,
             "role": app["role_applied"],
             "email": app["email"],
         }
@@ -410,12 +271,18 @@ def reject_application(application_id: int) -> tuple[bool, str]:
         if app["status"] != "pending":
             return False, f"Application is already {app['status']}."
         conn.execute(
+            """DELETE FROM users
+               WHERE LOWER(email) = LOWER(?) AND IFNULL(applicant_only, 0) = 1""",
+            (app["email"],),
+        )
+        conn.execute(
             """UPDATE applications
                SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP
                WHERE id = ?""",
             (application_id,),
         )
         conn.commit()
+        send_application_rejected_email(app["email"])
         return True, "Application rejected."
     finally:
         conn.close()
@@ -458,17 +325,7 @@ def change_password(
 
 
 def require_role(*roles: str):
-    """Decorator that enforces login + (optionally) a role allow-list.
-
-    Usage:
-        @app.route('/foo')
-        @require_role('registrar')
-        def foo(): ...
-
-        @app.route('/bar')
-        @require_role()          # any logged-in user
-        def bar(): ...
-    """
+    """Decorator that enforces login + (optionally) a role allow-list."""
 
     def decorator(view):
         @wraps(view)
@@ -478,14 +335,20 @@ def require_role(*roles: str):
 
             conn = get_db()
             user = conn.execute(
-                "SELECT status, role, must_change_password FROM users WHERE id = ?",
+                """SELECT status, role, must_change_password, applicant_only
+                   FROM users WHERE id = ?""",
                 (session["user_id"],),
             ).fetchone()
             conn.close()
 
-            if not user or user["status"] != "active":
+            if not user:
                 session.clear()
                 return redirect(url_for("home"))
+
+            if user["status"] != "active":
+                reason = user["status"]
+                session.clear()
+                return redirect(url_for("account_blocked_page", reason=reason))
 
             if user["must_change_password"] and view.__name__ != "change_password_page" \
                     and view.__name__ != "change_password_submit":
@@ -494,6 +357,14 @@ def require_role(*roles: str):
 
             if roles and user["role"] not in roles:
                 return redirect(url_for("dashboard"))
+
+            if (
+                roles
+                and user["role"] in roles
+                and int(user["applicant_only"] or 0) == 1
+                and user["role"] in ("student", "instructor")
+            ):
+                return redirect(url_for("apply_status"))
 
             return view(*args, **kwargs)
 
@@ -571,8 +442,6 @@ def reactivate_user(user_id: int) -> tuple[bool, str]:
 
 
 def list_manageable_users() -> list:
-    """All users a registrar can act on (everyone except themselves /
-    other registrars), with their current status surfaced for the UI."""
     conn = get_db()
     try:
         return conn.execute(

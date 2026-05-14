@@ -7,6 +7,7 @@ import { Pill } from '../components/Pill';
 
 export function RegistrarApplications(): React.ReactElement {
   const data = getPageData();
+  const mailOk = data.mail_configured === true;
   const [pending, setPending] = useState<ApplicationRow[]>(data.pending || []);
   const [reviewed, setReviewed] = useState<ApplicationRow[]>(data.reviewed || []);
   const [issued, setIssued] = useState<IssuedCredentials | null>(data.issued ?? null);
@@ -17,10 +18,10 @@ export function RegistrarApplications(): React.ReactElement {
     const resp = await postForm(`/registrar/applications/${applicationId}/${action}`, {});
     setBusy(null);
     if (resp.data) {
-      if ((resp.data as { issued?: IssuedCredentials }).issued !== undefined) {
-        setIssued((resp.data as { issued: IssuedCredentials }).issued);
+      const d = resp.data as { issued?: IssuedCredentials; pending?: ApplicationRow[]; reviewed?: ApplicationRow[] };
+      if (d.issued !== undefined) {
+        setIssued(d.issued);
       }
-      const d = resp.data as { pending?: ApplicationRow[]; reviewed?: ApplicationRow[] };
       if (d.pending) setPending(d.pending);
       if (d.reviewed) setReviewed(d.reviewed);
     } else if (!resp.ok && resp.error) {
@@ -40,6 +41,14 @@ export function RegistrarApplications(): React.ReactElement {
         }
       />
       <div className="container">
+        {!mailOk && (
+          <div className="banner-info" style={{ marginBottom: 16 }}>
+            Optional: configure <code>MAIL_SERVER</code> and <code>MAIL_FROM</code> if you want outbound
+            email (for example rejection notices). Submit and approve work without it; applicants see
+            their username and temporary password on the application status page, not by email.
+          </div>
+        )}
+
         {issued && <IssuedBanner issued={issued} />}
 
         <div className="card">
@@ -110,7 +119,9 @@ export function RegistrarApplications(): React.ReactElement {
                     <td>{a.name}</td>
                     <td>{a.email}</td>
                     <td>{capitalize(a.role_applied)}</td>
-                    <td><Pill status={a.status} /></td>
+                    <td>
+                      <Pill status={a.status} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -130,19 +141,53 @@ function IssuedBanner({ issued }: { issued: IssuedCredentials }): React.ReactEle
     return <div className="banner-info">{issued.message || 'Application rejected.'}</div>;
   }
   if (!issued.username) return <></>;
-  return (
-    <div className="card" style={{ border: '2px solid #27ae60' }}>
-      <h2>New account issued</h2>
-      <p className="muted">
-        Share these credentials with the new {issued.role} ({issued.email}). They sign
-        in at the home page with their Clerk account, then enter the temporary password
-        below on the change-password screen.
-      </p>
-      <div className="creds">
-        <div><span className="label">User ID:</span> {issued.user_id}</div>
-        <div><span className="label">Username:</span> {issued.username}</div>
-        <div><span className="label">Temporary password:</span> {issued.temp_password}</div>
+  if (issued.account_activated) {
+    return (
+      <div className="card" style={{ border: '2px solid #27ae60', marginBottom: 16 }}>
+        <h2>Application approved</h2>
+        <p className="muted">
+          Full portal access is now enabled for <strong>{issued.email}</strong>. They keep the same
+          username and temporary password they received when they applied (shown on their application
+          status page). They should sign in and set a new password if they have not already.
+        </p>
+        <details>
+          <summary className="muted" style={{ cursor: 'pointer' }}>
+            Registrar copy (support only)
+          </summary>
+          <div className="creds" style={{ marginTop: 8 }}>
+            <div>
+              <span className="label">User ID:</span> {issued.user_id}
+            </div>
+            <div>
+              <span className="label">Username:</span> {issued.username}
+            </div>
+          </div>
+        </details>
       </div>
+    );
+  }
+  return (
+    <div className="card" style={{ border: '2px solid #27ae60', marginBottom: 16 }}>
+      <h2>Application updated</h2>
+      <p className="muted">Summary below is for registrar support only.</p>
+      <details>
+        <summary className="muted" style={{ cursor: 'pointer' }}>
+          Registrar copy (support)
+        </summary>
+        <div className="creds" style={{ marginTop: 8 }}>
+          <div>
+            <span className="label">User ID:</span> {issued.user_id}
+          </div>
+          <div>
+            <span className="label">Username:</span> {issued.username}
+          </div>
+          {issued.temp_password != null && issued.temp_password !== '' && (
+            <div>
+              <span className="label">Temporary password:</span> {issued.temp_password}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }
