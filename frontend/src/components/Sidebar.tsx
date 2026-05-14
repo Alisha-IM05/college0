@@ -88,6 +88,24 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
           <SidebarLink href="/taboo" icon="🚫" label="Taboo Words" active={activePage === 'taboo'} />
         </>}
       </nav>
+      {/* Quick login buttons */}
+<div style={{ padding: '12px 8px', borderTop: '1px solid rgba(255,255,255,.07)', marginTop: 8 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,.3)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, paddingLeft: 4 }}>Quick Switch</div>
+        {[
+          { label: 'Registrar', username: 'registrar1', color: '#c0392b' },
+          { label: 'Instructor', username: 'prof_smith', color: '#27ae60' },
+          { label: 'Student 1', username: 'demo_student1', color: '#2980b9' },
+          { label: 'Student 2', username: 'demo_student2', color: '#8e44ad' },
+          ].map(q => (
+    <form key={q.username} method="POST" action="/login" style={{ marginBottom: 4 }}>
+      <input type="hidden" name="username" value={q.username} />
+      <input type="hidden" name="password" value="password123" />
+      <button type="submit" style={{ width: '100%', background: q.color, color: 'white', border: 'none', borderRadius: 6, padding: '6px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', textAlign: 'left', fontFamily: 'Inter, sans-serif' }}>
+        {q.label}
+      </button>
+    </form>
+  ))}
+</div>
 
       {/* User footer */}
       <div style={{ padding: '16px', borderTop: '1px solid rgba(255,255,255,.07)', display: 'flex', alignItems: 'center', gap: 10 }}>

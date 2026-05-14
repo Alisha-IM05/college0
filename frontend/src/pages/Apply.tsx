@@ -13,8 +13,8 @@ import { postForm, navigate } from '../lib/api';
 export function Apply(): React.ReactElement {
   const initial = getPageData();
   return (
-    <div className="wrap">
-      <div className="card card-narrow">
+    <div className="login-shell">
+    <div style={{ background: 'white', padding: '2.5rem', borderRadius: 12, boxShadow: '0 4px 16px rgba(46,74,122,.12)', width: '100%', maxWidth: 520, border: '1px solid #dbe2f0' }}>
         <h1>Apply to College0</h1>
         <p className="subtitle">Submit your application as a student or instructor.</p>
 
