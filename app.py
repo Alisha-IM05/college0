@@ -597,13 +597,35 @@ def dashboard():
             ORDER BY id DESC LIMIT 1""",
             (session['user_id'],)
         ).fetchone()
+    all_students = []
+    all_instructors = []
+    if session['role'] == 'registrar':
+        all_students = conn.execute(
+            """SELECT u.username, u.email, u.status, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
+               FROM users u JOIN students s ON u.id = s.id
+               WHERE u.role = 'student'
+               ORDER BY s.cumulative_gpa DESC"""
+        ).fetchall()
+        all_instructors = conn.execute(
+            """SELECT u.username, u.status,
+               COUNT(c.id) as course_count,
+               AVG(g.numeric_value) as avg_class_gpa
+               FROM users u
+               LEFT JOIN courses c ON c.instructor_id = u.id AND c.semester_id = ?
+               LEFT JOIN grades g ON g.course_id = c.id
+               WHERE u.role = 'instructor'
+               GROUP BY u.id""",
+            (semester['id'] if semester else 0,)
+        ).fetchall()
     conn.close()
     return render_react('dashboard',
                         username=session['username'],
                         role=session['role'],
                         semester=dict(semester) if semester else None,
                         student_data=dict(student_data) if student_data else None,
-                        grades=_rows_to_dicts(grades))
+                        grades=_rows_to_dicts(grades),
+                        all_students=_rows_to_dicts(all_students),
+                        all_instructors=_rows_to_dicts(all_instructors))
     
 @app.route('/profile')
 def profile():
@@ -645,18 +667,25 @@ def course_registration():
             (session['user_id'],)
         ).fetchone()
         special_registration = sr and sr['special_registration'] == 1
-    courses = conn.execute(
-    """SELECT c.*, u.username as instructor_name,
-       c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
-       FROM courses c
-       LEFT JOIN users u ON c.instructor_id = u.id
-       WHERE c.status = 'active' AND c.semester_id = ?
-       AND c.id NOT IN (
-           SELECT course_id FROM enrollments
-           WHERE student_id = ? AND status = 'cancelled'
-       )""",
-    (semester['id'], session['user_id'])
-    ).fetchall()
+    current_period = semester['current_period'] if semester else None
+    can_register = (current_period == 'registration') or (current_period == 'special_registration' and special_registration)
+
+    if can_register:
+        courses = conn.execute(
+        """SELECT c.*, u.username as instructor_name,
+        c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
+        FROM courses c
+        LEFT JOIN users u ON c.instructor_id = u.id
+        WHERE c.status = 'active' AND c.semester_id = ?
+        AND c.id NOT IN (
+            SELECT course_id FROM enrollments
+            WHERE student_id = ? AND status = 'cancelled'
+        )""",
+        (semester['id'], session['user_id'])
+        ).fetchall()
+    else:
+        courses = []
+    
     enrolled = conn.execute(
         """SELECT c.*, u.username as instructor_name 
            FROM enrollments e
@@ -710,12 +739,27 @@ def instructor_courses():
            ORDER BY c.status ASC, c.course_name ASC""",
         (session['user_id'], semester['id'])
     ).fetchall()
+    students_in_classes = conn.execute(
+        """SELECT u.username, u.email, u.status,
+           s.semester_gpa, s.cumulative_gpa, s.credits_earned,
+           c.course_name, g.letter_grade
+           FROM enrollments e
+           JOIN users u ON e.student_id = u.id
+           JOIN students s ON u.id = s.id
+           JOIN courses c ON e.course_id = c.id
+           LEFT JOIN grades g ON g.student_id = e.student_id AND g.course_id = e.course_id
+           WHERE c.instructor_id = ? AND c.semester_id = ?
+           AND e.status = 'enrolled'
+           ORDER BY c.course_name, u.username""",
+        (session['user_id'], semester['id'])
+    ).fetchall()
     conn.close()
     return render_react('instructor_courses',
                         username=session['username'],
                         role=session['role'],
                         semester=dict(semester) if semester else None,
-                        courses=_rows_to_dicts(courses))
+                        courses=_rows_to_dicts(courses),
+                        students=_rows_to_dicts(students_in_classes))
 
 @app.route('/courses/register/<int:course_id>', methods=['POST'])
 def register_for_course(course_id):
