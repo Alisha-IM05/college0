@@ -56,6 +56,8 @@ export interface IssuedCredentials {
   error?: string;
   rejected?: boolean;
   message?: string;
+  /** Set when registrar approves an applicant who already received credentials at submit. */
+  account_activated?: boolean;
 }
 
 export interface PageData {
@@ -77,14 +79,18 @@ export interface PageData {
   grades?: GradeRow[];
 
   // apply / status
-  clerk_publishable_key?: string;
+  mail_configured?: boolean;
   applications?: ApplicationRow[];
-  signed_in?: boolean;
+  token?: string;
+  missing_token?: boolean;
+  logged_in?: boolean;
+  reason?: string;
 
   // registrar
   pending?: ApplicationRow[];
   reviewed?: ApplicationRow[];
   issued?: IssuedCredentials | null;
+  mail_configured?: boolean;
   users?: UserRow[];
   pending_fine_user_ids?: number[];
 

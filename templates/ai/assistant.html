@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>College0 Assistant</title>
+<style>
+:root {
+  --bg: #f7f8fb;
+  --panel: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --blue: #223f66;
+  --blue-2: #315b92;
+  --user: #eef2f7;
+  --green: #167a3d;
+  --green-bg: #e8f7ee;
+  --gold: #8a6400;
+  --gold-bg: #fff7df;
+  --red: #b42318;
+  --red-bg: #feeceb;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  background: rgba(247, 248, 251, .86);
+  border-bottom: 1px solid rgba(229, 231, 235, .8);
+  backdrop-filter: blur(14px);
+}
+.brand { font-weight: 700; font-size: 17px; }
+.top-spacer { flex: 1; }
+.user-meta { color: var(--muted); font-size: 14px; }
+.topbar a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.topbar a:hover { color: var(--blue); }
+.review-link {
+  border: 1px solid #d8dee8;
+  background: white;
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-weight: 700;
+}
+.flag-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 12px;
+}
+.app {
+  min-height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+}
+.chat-wrap {
+  width: min(800px, calc(100vw - 32px));
+  margin: 0 auto;
+  flex: 1;
+  padding: 48px 0 150px;
+}
+.hero {
+  min-height: 42vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.hero h1 {
+  margin: 0 0 10px;
+  font-size: clamp(32px, 5vw, 48px);
+  letter-spacing: 0;
+  color: var(--blue);
+}
+.hero p {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 17px;
+}
+.context-pill {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 16px;
+  border-radius: 999px;
+  background: #eaf1ff;
+  color: var(--blue);
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 600;
+}
+.chip:hover { border-color: #cbd5e1; box-shadow: 0 4px 14px rgba(15, 23, 42, .06); }
+.thread { display: flex; flex-direction: column; gap: 28px; }
+.message {
+  animation: fadeIn .18s ease both;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.user-row { display: flex; justify-content: flex-end; }
+.user-bubble {
+  max-width: 82%;
+  background: var(--user);
+  border-radius: 22px;
+  padding: 13px 17px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.user-bubble.filtered-user {
+  box-shadow: inset 0 0 0 1px #fecaca;
+}
+.user-filter-note {
+  margin-top: 6px;
+  color: var(--red);
+  font-size: 12px;
+  text-align: right;
+}
+.ai-row {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+.ai-body {
+  line-height: 1.65;
+  white-space: pre-wrap;
+  min-width: 0;
+}
+.source-line {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.badge.local { background: var(--green-bg); color: var(--green); }
+.badge.llm { background: var(--gold-bg); color: var(--gold); }
+.badge.filtered { background: var(--red-bg); color: var(--red); }
+.warning {
+  margin-top: 10px;
+  color: var(--gold);
+  background: var(--gold-bg);
+  border: 1px solid #f4d987;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  white-space: normal;
+}
+.filtered-note {
+  margin-top: 10px;
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  white-space: normal;
+}
+.feedback {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.feedback span { color: var(--muted); font-size: 13px; }
+.mini-btn, .flag-link {
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 11px;
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: none;
+}
+.mini-btn:hover, .flag-link:hover { background: #f3f4f6; }
+.ack { color: var(--green); font-weight: 700; display: none; }
+.rec-strip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 12px 2px 6px;
+  margin-top: 10px;
+  scroll-snap-type: x proximity;
+  max-width: min(720px, calc(100vw - 104px));
+  white-space: normal;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.rec-card {
+  flex: 0 0 230px;
+  scroll-snap-align: start;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+}
+.rec-name { font-weight: 800; color: var(--blue); margin-bottom: 8px; }
+.diff {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 9px;
+}
+.diff.introductory { background: var(--green-bg); color: var(--green); }
+.diff.intermediate { background: #eaf1ff; color: var(--blue-2); }
+.diff.advanced { background: var(--gold-bg); color: var(--gold); }
+.rec-reason { color: var(--muted); font-size: 13px; line-height: 1.4; min-height: 54px; }
+.rec-slot { color: #8b94a3; font-size: 12px; margin: 10px 0; }
+.enroll-btn {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: var(--blue);
+  color: white;
+  padding: 9px 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.enroll-btn:disabled { opacity: .65; cursor: default; }
+.composer-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  background: linear-gradient(to top, var(--bg) 70%, rgba(247, 248, 251, 0));
+  padding: 18px 16px 18px;
+}
+.quick-actions {
+  width: min(800px, calc(100vw - 32px));
+  margin: 0 auto 10px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.quick-action {
+  flex: 0 0 auto;
+  border: 1px solid #d8dee8;
+  background: rgba(255,255,255,.92);
+  color: var(--blue);
+  border-radius: 999px;
+  padding: 9px 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 5px 18px rgba(15, 23, 42, .06);
+}
+.quick-action:hover { background: white; border-color: #b9c6d8; }
+.composer {
+  width: min(800px, calc(100vw - 32px));
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  background: white;
+  border: 1px solid #d8dee8;
+  border-radius: 24px;
+  padding: 10px 10px 10px 18px;
+  box-shadow: 0 14px 42px rgba(15, 23, 42, .12);
+}
+.composer textarea {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  resize: none;
+  max-height: 140px;
+  min-height: 28px;
+  padding: 9px 0;
+  font: inherit;
+  line-height: 1.45;
+  color: var(--text);
+  background: transparent;
+}
+.disclaimer {
+  width: min(800px, calc(100vw - 32px));
+  margin: 8px auto 0;
+  color: #8b94a3;
+  font-size: 12px;
+  text-align: center;
+}
+.send-btn {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--blue);
+  color: white;
+  cursor: pointer;
+  font-size: 18px;
+  display: grid;
+  place-items: center;
+}
+.send-btn:disabled { opacity: .5; cursor: default; }
+.dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 10px 0;
+}
+.dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--blue);
+  animation: bounce 1s infinite ease-in-out;
+}
+.dots span:nth-child(2) { animation-delay: .14s; }
+.dots span:nth-child(3) { animation-delay: .28s; }
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(.65); opacity: .45; }
+  40% { transform: scale(1); opacity: 1; }
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, .42);
+}
+.modal {
+  width: min(440px, calc(100vw - 32px));
+  background: white;
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .22);
+  text-align: center;
+}
+.modal h2 { margin: 0 0 10px; color: var(--red); }
+.modal p { color: var(--muted); line-height: 1.5; }
+.modal a {
+  display: inline-block;
+  margin-top: 14px;
+  background: var(--blue);
+  color: white;
+  text-decoration: none;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-weight: 800;
+}
+@media (max-width: 680px) {
+  .user-meta { display: none; }
+  .chat-wrap { padding-top: 28px; }
+  .hero { min-height: 46vh; }
+  .user-bubble { max-width: 92%; }
+}
+</style>
+</head>
+<body>
+{% if access_denied %}
+<div class="modal-backdrop">
+  <div class="modal">
+    <h2>Access Denied</h2>
+    <p>Your account status does not permit access to College0 Assistant.</p>
+    <a href="/dashboard">Return to Dashboard</a>
+  </div>
+</div>
+{% endif %}
+
+<header class="topbar">
+	  <div class="brand">College0 Assistant</div>
+	  <div class="top-spacer"></div>
+	  <div class="user-meta">Welcome, {{ username }}</div>
+  {% if role == 'registrar' %}
+  <a class="review-link" href="/ai/flags">Review Flagged Responses{% if pending_flags %}<span class="flag-count">{{ pending_flags|length }}</span>{% endif %}</a>
+  {% endif %}
+	  <a href="/dashboard">Dashboard</a>
+	  <a href="/logout">Logout</a>
+	</header>
+
+<main class="app">
+  <section class="chat-wrap">
+	    <div class="hero" id="hero">
+	      <h1>How can I help?</h1>
+
+	      <p>Ask about your courses, grades, recommendations, or College0 academic records.</p>
+	    </div>
+    <div class="thread" id="thread"></div>
+  </section>
+</main>
+
+<div class="composer-wrap">
+  <div class="quick-actions">
+    {% if role == 'student' %}
+    <button class="quick-action" type="button" data-prompt="What is my GPA?">What's my GPA?</button>
+    <button class="quick-action" type="button" data-prompt="What classes am I taking?">What classes am I taking?</button>
+    <button class="quick-action" type="button" data-prompt="What classes should I take?">What classes should I take?</button>
+    {% elif role == 'registrar' %}
+    <button class="quick-action" type="button" data-prompt="List every student with GPA and classes">All students</button>
+    <button class="quick-action" type="button" data-prompt="Who is on probation?">Probation list</button>
+    <button class="quick-action" type="button" data-prompt="Summarize enrollment by course">Enrollment summary</button>
+    {% else %}
+    <button class="quick-action" type="button" data-prompt="What courses are available?">Available courses</button>
+    <button class="quick-action" type="button" data-prompt="Summarize my assigned courses">My classes</button>
+    <button class="quick-action" type="button" data-prompt="Who is enrolled in my classes?">My roster</button>
+    {% endif %}
+  </div>
+	  <form class="composer" id="queryForm">
+	    <textarea id="queryText" rows="1" maxlength="2000" placeholder="Message College0 Assistant"></textarea>
+	    <button class="send-btn" id="submitBtn" type="submit" aria-label="Send">↑</button>
+	  </form>
+  <div class="disclaimer">AI isn't perfect and can make mistakes; please verify information.</div>
+	</div>
+
+<script>
+var form = document.getElementById('queryForm');
+var input = document.getElementById('queryText');
+var submitBtn = document.getElementById('submitBtn');
+var thread = document.getElementById('thread');
+var hero = document.getElementById('hero');
+
+document.querySelectorAll('[data-prompt]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    submitQuery(btn.dataset.prompt);
+  });
+});
+
+input.addEventListener('input', autoResize);
+input.addEventListener('keydown', function(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    form.requestSubmit();
+  }
+});
+function autoResize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+}
+
+form.addEventListener('submit', function(event) {
+  event.preventDefault();
+  submitQuery(input.value);
+});
+
+function submitQuery(rawText) {
+  var text = String(rawText || '').trim();
+  if (!text) return;
+  hero.style.display = 'none';
+  var userBubble = addUserMessage(filterTaboo(text));
+  input.value = '';
+  autoResize();
+  submitBtn.disabled = true;
+  var spinner = addSpinner();
+
+  fetch('/ai/query/submit', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query_text: text})
+  }).then(function(response) {
+    return response.json();
+  }).then(function(data) {
+    spinner.remove();
+    if (data.display_query && userBubble) {
+      userBubble.textContent = data.display_query;
+      if (data.display_query !== text) {
+        userBubble.classList.add('filtered-user');
+        addUserFilterNote(userBubble);
+      }
+    }
+    if (data.error) addAiMessage({response: data.error, source: 'local_error'});
+    else addAiMessage(data);
+  }).catch(function() {
+    spinner.remove();
+    addAiMessage({
+      response: 'The request could not be completed. Please check your connection and try again.',
+      source: 'local_error'
+    });
+  }).finally(function() {
+    submitBtn.disabled = false;
+    scrollToBottom();
+  });
+}
+
+function addUserMessage(text) {
+  var wrap = document.createElement('div');
+  wrap.className = 'message user-row';
+  var bubble = document.createElement('div');
+  bubble.className = 'user-bubble';
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  thread.appendChild(wrap);
+  scrollToBottom();
+  return bubble;
+}
+
+function addUserFilterNote(bubble) {
+  if (!bubble || bubble.parentNode.querySelector('.user-filter-note')) return;
+  var note = document.createElement('div');
+  note.className = 'user-filter-note';
+  note.textContent = 'Taboo language filtered';
+  bubble.parentNode.appendChild(note);
+}
+
+function addSpinner() {
+  var wrap = document.createElement('div');
+  wrap.className = 'message ai-row';
+  wrap.innerHTML = '<div class="avatar">C0</div><div class="ai-body"><span class="dots"><span></span><span></span><span></span></span></div>';
+  thread.appendChild(wrap);
+  scrollToBottom();
+  return wrap;
+}
+
+function addAiMessage(data) {
+  var text = cleanResponse(data.response || '');
+  var isLlm = data.source === 'llm';
+  var isFiltered = Boolean(data.taboo_filtered) || text.indexOf('****') !== -1;
+  var wrap = document.createElement('div');
+  wrap.className = 'message ai-row';
+
+  var avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = 'C0';
+
+  var body = document.createElement('div');
+  body.className = 'ai-body';
+
+  var textEl = document.createElement('div');
+  textEl.textContent = text;
+  body.appendChild(textEl);
+
+  if (data.recommendation_cards && data.recommendation_cards.length) {
+    body.appendChild(buildRecommendations(data.recommendation_cards));
+  }
+
+  if (data.hallucination_warning || isLlm) {
+    var warning = document.createElement('div');
+    warning.className = 'warning';
+    warning.textContent = 'This answer was generated by an AI model. Verify important information before acting on it.';
+    body.appendChild(warning);
+  }
+
+  if (isFiltered) {
+    var filtered = document.createElement('div');
+    filtered.className = 'filtered-note';
+    filtered.textContent = 'Some language was filtered by the College0 taboo-word system.';
+    body.appendChild(filtered);
+  }
+
+  var source = document.createElement('div');
+  source.className = 'source-line';
+  var badge = document.createElement('span');
+  badge.className = 'badge ' + (isFiltered ? 'filtered' : isLlm ? 'llm' : 'local');
+  badge.textContent = isFiltered ? 'Filtered' : isLlm ? 'LLM' : 'Local DB';
+  source.appendChild(badge);
+  body.appendChild(source);
+
+  if (data.query_id) {
+    body.appendChild(buildFeedback(data.query_id));
+  }
+
+  wrap.appendChild(avatar);
+  wrap.appendChild(body);
+  thread.appendChild(wrap);
+  scrollToBottom();
+}
+
+function buildRecommendations(cards) {
+  var strip = document.createElement('div');
+  strip.className = 'rec-strip';
+  cards.forEach(function(card) {
+    var difficulty = String(card.difficulty || 'Intermediate');
+    var item = document.createElement('article');
+    item.className = 'rec-card';
+    item.innerHTML =
+      '<div class="rec-name"></div>' +
+      '<span class="diff ' + difficulty.toLowerCase() + '"></span>' +
+      '<div class="rec-reason"></div>' +
+      '<div class="rec-slot"></div>' +
+      '<button class="enroll-btn" type="button">Enroll</button>';
+    item.querySelector('.rec-name').textContent = card.course_name || 'Course';
+    item.querySelector('.diff').textContent = difficulty;
+    item.querySelector('.rec-reason').textContent = card.reason || '';
+    item.querySelector('.rec-slot').textContent = card.time_slot || 'Schedule TBD';
+    var btn = item.querySelector('.enroll-btn');
+    btn.addEventListener('click', function() {
+      btn.disabled = true;
+      btn.textContent = 'Enrolling...';
+      fetch('/ai/enroll/' + card.id, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(card.student_id ? {student_id: card.student_id} : {})
+      })
+        .then(function(response) { return response.json(); })
+        .then(function(result) {
+          if (result.ok) {
+            btn.textContent = 'Enrolled';
+            btn.dataset.enrolled = 'true';
+          } else {
+            btn.disabled = false;
+            btn.textContent = result.message || 'Could not enroll';
+          }
+        })
+        .catch(function() {
+          btn.disabled = false;
+          btn.textContent = 'Retry';
+        });
+    });
+    strip.appendChild(item);
+  });
+  return strip;
+}
+
+function buildFeedback(queryId) {
+  var row = document.createElement('div');
+  row.className = 'feedback';
+  row.innerHTML =
+    '<span>Was this helpful?</span>' +
+    '<button class="mini-btn" type="button" data-helpful="1">Yes</button>' +
+    '<button class="mini-btn" type="button" data-helpful="0">No</button>' +
+    '<span class="ack">Thanks</span>' +
+    '<a class="flag-link" href="/ai/flag/' + queryId + '">Flag response</a>';
+  row.querySelectorAll('[data-helpful]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      fetch('/ai/query/' + queryId + '/feedback', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({helpful: Number(btn.dataset.helpful)})
+      }).then(function(response) {
+        return response.json();
+      }).then(function(result) {
+        if (result.ok) {
+          row.querySelectorAll('[data-helpful]').forEach(function(button) {
+            button.disabled = true;
+          });
+          row.querySelector('.ack').style.display = 'inline';
+        }
+      });
+    });
+  });
+  return row;
+}
+
+function cleanResponse(value) {
+  return String(value || '').replace(/\n\n.*Note: This response was generated by an AI language model[\s\S]*$/i, '').trim();
+}
+function filterTaboo(value) {
+  var words = [
+    'stupid', 'idiot', 'dumb', 'moron', 'hate',
+    'worthless', 'incompetent', 'cheat', 'cheater',
+    'plagiarize', 'plagiarism', 'expel', 'expelled',
+    'loser', 'failure', 'fuck', 'fucking', 'fucked',
+    'fucker', 'shit', 'shitty', 'bullshit', 'bitch',
+    'bitches', 'asshole', 'dick', 'dicks', 'crap',
+    'damn', 'bastard', 'slut', 'whore', 'piss',
+    'suck', 'sucks', 'sucked', 'sucking'
+  ];
+  var filtered = String(value || '');
+  words.forEach(function(word) {
+    filtered = filtered.replace(new RegExp('\\\\b' + escapeRegExp(word) + '\\\\b', 'gi'), '****');
+  });
+  return filtered;
+}
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function scrollToBottom() {
+  window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+}
+</script>
+</body>
+</html>

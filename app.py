@@ -3,6 +3,7 @@ import os
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from jinja2 import ChoiceLoader, FileSystemLoader
+from modules.ai import register_ai_routes
 
 try:
     from dotenv import load_dotenv
@@ -25,36 +26,28 @@ from modules.semester import (
     advance_period, create_course, register_student,
     admit_from_waitlist, enforce_minimums, submit_grade,
     apply_for_graduation, resolve_graduation,
-    get_current_semester, get_current_period, 
-    use_honor_roll_to_remove_warning, submit_gpa_justification, 
+    get_current_semester, get_current_period,
+    use_honor_roll_to_remove_warning, submit_gpa_justification,
     resolve_gpa_flag, get_active_semester
 )
 
 from modules.auth import (
-    submit_application, get_applications_for_clerk_user,
+    submit_application,
+    get_applications_for_view_token,
+    get_applications_for_user_id,
     list_pending_applications, list_all_applications,
     approve_application, reject_application,
     change_password,
     suspend_user, terminate_user, reactivate_user, list_manageable_users,
-    require_role, verify_clerk_session, establish_clerk_session,
+    require_role,
 )
-
-
+from modules.mail import is_mail_configured
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
 ])
 
 app.secret_key = 'college0secretkey'
-
-
-@app.context_processor
-def inject_clerk_config():
-    """Make the Clerk publishable key available to every template so the
-    visitor-facing pages can boot Clerk JS without a backend round-trip."""
-    return {
-        "CLERK_PUBLISHABLE_KEY": os.environ.get("CLERK_PUBLISHABLE_KEY", ""),
-    }
 
 
 # ── React shell helper ───────────────────────────────────────────────────────
@@ -85,7 +78,9 @@ _PAGE_TITLES = {
     'my_reviews':        'College0 — Reviews',
     'home':              'College0 — AI-Enabled College Management',
     'profile':           'College0 — My Profile',
+    'ai_assistant':      'College0 — AI Assistant',
     'suspended':         'College0 — Account Suspended',
+    'account_blocked':   'College0 — Account inactive',
 }
 
 
@@ -101,7 +96,6 @@ def _json_default(obj):
 
 
 def render_react(page, **data):
-    data.setdefault('clerk_publishable_key', os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
     return render_template(
         '_shell.html',
         page=page,
@@ -127,8 +121,17 @@ def _rows_to_dicts(rows):
 _ALLOWED_DURING_PW_CHANGE = {
     'change_password_page', 'change_password_submit',
     'logout', 'static', 'apply_status', 'apply_page', 'apply_submit',
-    'suspension_page', 'suspension_pay',
+    'suspension_page', 'suspension_pay','account_blocked_page',
 }
+
+
+# Logged-in applicants (pending registrar approval) may only use these routes.
+_ALLOWED_FOR_APPLICANT_ONLY = frozenset({
+    'change_password_page', 'change_password_submit',
+    'logout', 'static', 'apply_status', 'apply_status_json',
+    'apply_page', 'apply_submit',
+    'account_blocked_page', 'login_page', 'login',
+})
 
 
 @app.before_request
@@ -171,9 +174,9 @@ def enforce_password_change():
         return None
 
     if row['status'] != 'active':
+        reason = row['status']
         session.clear()
-        return redirect(url_for('home'))
-
+        return redirect(url_for('account_blocked_page', reason=reason))
     if row['must_change_password']:
         session['must_change_password'] = True
         return redirect(url_for('change_password_page'))
@@ -213,6 +216,8 @@ def suspension_pay():
 with app.app_context():
     init_db()
 
+register_ai_routes(app)   # Subsystem 5 — mounts React/API AI routes from modules/ai.py
+
 
 # ── TEMPORARY LOGIN (until Zhuolin builds real auth) ─────────────────────────
 
@@ -220,26 +225,175 @@ def create_test_users():
     conn = get_db()
     test_users = [
         ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
-        ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('zhuolin', 'zhoulinl@college0.com', '12345', 'student'),
-        ('student2',   'student2@college0.com',   'password123', 'student'),
+        ('instructor1', 'instructor1@college0.com', 'password', 'instructor'),
+        ('instructor2', 'instructor2@college0.com', 'password', 'instructor'),
+        ('student1', 'student1@college0.com', 'password', 'student'),
+        ('student2',   'student2@college0.com',   'password', 'student'),
+        ('nathan', 'nathan@college0.com', 'password', 'student'),
+        ('maya', 'maya@college0.com', 'password', 'student'),
+        ('liam', 'liam@college0.com', 'password', 'student'),
+        ('zhuolin', 'zhoulinl@college0.com', 'password', 'student'),
     ]
     for username, email, password, role in test_users:
-        try:
-            conn.execute(
-                "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)",
-                (username, email, password, role)
-            )
-            if role == 'student':
-                user = conn.execute(
-                    "SELECT id FROM users WHERE username = ?", (username,)
-                ).fetchone()
-                conn.execute(
-                    "INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],)
-                )
-        except:
-            pass
+        conn.execute(
+            """INSERT OR IGNORE INTO users (username, email, password, role)
+               VALUES (?, ?, ?, ?)""",
+            (username, email, password, role)
+        )
+        conn.execute(
+            "UPDATE users SET password = ?, role = ? WHERE username = ?",
+            (password, role, username)
+        )
+        if role == 'student':
+            user = conn.execute(
+                "SELECT id FROM users WHERE username = ?", (username,)
+            ).fetchone()
+            conn.execute("INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],))
 
+    conn.execute(
+        """DELETE FROM students
+           WHERE id IN (SELECT s.id FROM students s JOIN users u ON s.id = u.id WHERE u.role != 'student')"""
+    )
+
+    def user_id(username):
+        row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        return row['id'] if row else None
+
+    instructor1 = user_id('instructor1')
+    instructor2 = user_id('instructor2')
+
+    conn.execute(
+        "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (1, 'Spring 2026', 'running')"
+    )
+    conn.execute(
+        "UPDATE semesters SET current_period = 'running' WHERE id = 1"
+    )
+
+    demo_courses = [
+        ('CS101 - Intro to Computing', instructor1, 'Mon/Wed', 1, '10:00', '11:30', 30),
+        ('CS201 - Data Structures', instructor1, 'Tue/Thu', 3, '13:00', '14:30', 30),
+        ('MATH101 - Calculus I', instructor2, 'Mon/Wed', 1, '14:00', '15:30', 30),
+        ('ENG101 - English Composition', instructor2, 'Fri', 5, '09:00', '12:00', 30),
+        ('CS310 - Algorithms', instructor1, 'Mon/Wed', 1, '12:00', '13:30', 25),
+        ('CS410 - Machine Learning', instructor2, 'Tue/Thu', 3, '10:00', '11:30', 20),
+    ]
+    for name, instructor_id, slot, day, start, end, cap in demo_courses:
+        existing = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE courses
+                   SET instructor_id = ?, time_slot = ?, day_of_week = ?,
+                       start_time = ?, end_time = ?, capacity = ?, status = 'active'
+                   WHERE id = ?""",
+                (instructor_id, slot, day, start, end, cap, existing['id'])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO courses
+                   (course_name, instructor_id, time_slot, day_of_week, start_time,
+                    end_time, capacity, semester_id, enrolled_count, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')""",
+                (name, instructor_id, slot, day, start, end, cap)
+            )
+
+    def course_id(name):
+        row = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        return row['id'] if row else None
+
+    demo_students = {
+        'student1': {'semester_gpa': 3.20, 'cumulative_gpa': 3.15, 'credits_earned': 42, 'status': 'active', 'honor_roll': 0},
+        'student2': {'semester_gpa': 2.70, 'cumulative_gpa': 2.85, 'credits_earned': 36, 'status': 'active', 'honor_roll': 0},
+        'nathan': {'semester_gpa': 3.42, 'cumulative_gpa': 3.42, 'credits_earned': 48, 'status': 'active', 'honor_roll': 0},
+        'maya': {'semester_gpa': 3.90, 'cumulative_gpa': 3.88, 'credits_earned': 72, 'status': 'active', 'honor_roll': 1},
+        'liam': {'semester_gpa': 1.80, 'cumulative_gpa': 1.95, 'credits_earned': 30, 'status': 'probation', 'honor_roll': 0},
+    }
+    for username, data in demo_students.items():
+        sid = user_id(username)
+        if sid:
+            conn.execute(
+                """UPDATE students
+                   SET semester_gpa = ?, cumulative_gpa = ?, credits_earned = ?,
+                       status = ?, honor_roll = ?
+                   WHERE id = ?""",
+                (
+                    data['semester_gpa'], data['cumulative_gpa'],
+                    data['credits_earned'], data['status'], data['honor_roll'], sid
+                )
+            )
+
+    demo_enrollments = {
+        'student1': ['CS101 - Intro to Computing', 'ENG101 - English Composition'],
+        'student2': ['MATH101 - Calculus I'],
+        'nathan': ['CS101 - Intro to Computing', 'CS201 - Data Structures', 'CS410 - Machine Learning'],
+        'maya': ['CS310 - Algorithms', 'CS410 - Machine Learning'],
+        'liam': ['ENG101 - English Composition', 'MATH101 - Calculus I'],
+    }
+    for username, course_names in demo_enrollments.items():
+        sid = user_id(username)
+        for course_name in course_names:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    """SELECT id FROM enrollments
+                       WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+                    (sid, cid)
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+                        (sid, cid)
+                    )
+
+    grade_values = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
+    demo_grades = {
+        'student1': [('CS101 - Intro to Computing', 'B')],
+        'student2': [('ENG101 - English Composition', 'B')],
+        'nathan': [('CS101 - Intro to Computing', 'A'), ('ENG101 - English Composition', 'B')],
+        'maya': [('CS101 - Intro to Computing', 'A'), ('CS201 - Data Structures', 'A')],
+        'liam': [('CS101 - Intro to Computing', 'D'), ('CS201 - Data Structures', 'F')],
+    }
+    for username, grades in demo_grades.items():
+        sid = user_id(username)
+        for course_name, letter in grades:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    "SELECT id FROM grades WHERE student_id = ? AND course_id = ?",
+                    (sid, cid)
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "UPDATE grades SET letter_grade = ?, numeric_value = ? WHERE id = ?",
+                        (letter, grade_values[letter], exists['id'])
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO grades
+                           (student_id, course_id, letter_grade, numeric_value)
+                           VALUES (?, ?, ?, ?)""",
+                        (sid, cid, letter, grade_values[letter])
+                    )
+
+    course_ids = [
+        course_id(name) for name, *_ in demo_courses
+    ]
+    for cid in course_ids:
+        if cid:
+            count = conn.execute(
+                """SELECT COUNT(*) FROM enrollments
+                   WHERE course_id = ? AND status = 'enrolled'""",
+                (cid,)
+            ).fetchone()[0]
+            conn.execute("UPDATE courses SET enrolled_count = ? WHERE id = ?", (count, cid))
+
+    for word in ['hate', 'stupid', 'idiot']:
+        conn.execute("INSERT OR IGNORE INTO taboo_words (word) VALUES (?)", (word,))
 
     conn.commit()
     conn.close()
@@ -254,8 +408,12 @@ def home():
     conn = get_db()
     semester = get_active_semester()
     stats = {
-        'student_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='student'").fetchone()[0],
-        'instructor_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='instructor'").fetchone()[0],
+        'student_count': conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='student' AND IFNULL(applicant_only,0)=0"
+        ).fetchone()[0],
+        'instructor_count': conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='instructor' AND IFNULL(applicant_only,0)=0"
+        ).fetchone()[0],
         'course_count': conn.execute("SELECT COUNT(*) FROM courses WHERE status='active'").fetchone()[0],
     }
     conn.close()
@@ -265,8 +423,7 @@ def home():
 
 @app.route('/login', methods=['GET'])
 def login_page():
-    return render_react('login',
-                        clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
+    return render_react('login')
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -287,8 +444,20 @@ def login():
 
     if not user:
         return _login_error("Invalid username or password.")
+    if user['status'] == 'suspended':
+        if wants_json():
+            return jsonify({
+                'ok': False,
+                'redirect': url_for('account_blocked_page', reason='suspended'),
+            }), 200
+        return redirect(url_for('account_blocked_page', reason='suspended'))
     if user['status'] == 'terminated':
-        return _login_error("Your account has been terminated. Please contact the registrar.")
+        if wants_json():
+            return jsonify({
+                'ok': False,
+                'redirect': url_for('account_blocked_page', reason='terminated'),
+            }), 200
+        return redirect(url_for('account_blocked_page', reason='terminated'))
 
     session['user_id']  = user['id']
     session['username'] = user['username']
@@ -306,53 +475,33 @@ def login():
         target = url_for('change_password_page')
     else:
         session.pop('must_change_password', None)
-        target = url_for('dashboard')
+        applicant_only = int(dict(user).get('applicant_only') or 0)
+        if applicant_only == 1:
+            target = url_for('apply_status')
+        else:
+            target = url_for('dashboard')
 
     if wants_json():
         return jsonify({'ok': True, 'redirect': target})
     return redirect(target)
 
-@app.route('/auth/clerk-login', methods=['POST'])
-def clerk_login():
-    """Bridge a verified Clerk session into the Flask session. The React
-    login page calls this after the user signs in with the Clerk <SignIn>
-    widget, so the same identity used on /apply can open a normal app
-    session. UC-10/UC-11 still apply: if the user row has
-    must_change_password=1, we redirect to /change-password just like the
-    username/password login does."""
-    result = establish_clerk_session(request)
-    if not result.get('ok'):
-        payload = {'ok': False, 'error': result.get('error', 'Sign-in failed.')}
-        if result.get('redirect'):
-            payload['redirect'] = result['redirect']
-        return jsonify(payload), 200
-
-    user = result['user']
-    session['user_id']  = user['id']
-    session['username'] = user['username']
-    session['role']     = user['role']
-    if result['must_change_password']:
-        session['must_change_password'] = True
-    else:
-        session.pop('must_change_password', None)
-
-    return jsonify({'ok': True, 'redirect': result['redirect']})
-
 
 @app.route('/logout')
 def logout():
-    """Clear the Flask session and bounce back to /. The `?signed_out=1`
-    flag tells the React login page to also sign out of Clerk on arrival —
-    otherwise the lingering Clerk JWT would let the page's ClerkBridge
-    re-establish the Flask session immediately and the user would land
-    right back on /dashboard."""
+    """Clear the Flask session and bounce back to /."""
     session.clear()
-    return redirect(url_for('home') + '?signed_out=1')
+    return redirect(url_for('home'))
 
 
 # ── APPLICATIONS (UC-07 / UC-08 / UC-11) ─────────────────────────────────────
-# Visitors authenticate with Clerk (JS) to submit an application and check
-# its status. The Clerk session is verified server-side via verify_clerk_session.
+
+
+@app.route('/account-blocked', methods=['GET'])
+def account_blocked_page():
+    reason = request.args.get('reason', '')
+    if reason not in ('suspended', 'terminated'):
+        reason = ''
+    return render_react('account_blocked', reason=reason)
 
 @app.route('/apply', methods=['GET'])
 def apply_page():
@@ -361,20 +510,13 @@ def apply_page():
 
 @app.route('/apply', methods=['POST'])
 def apply_submit():
-    clerk_user_id = verify_clerk_session(request)
-    if not clerk_user_id:
-        msg = "You must sign in with Clerk before submitting an application."
-        if wants_json():
-            return jsonify({'ok': False, 'error': msg}), 200
-        return render_react('apply', error=msg)
-
     first_name = request.form.get('first_name', '')
     last_name = request.form.get('last_name', '')
     email = request.form.get('email', '')
     role_applied = request.form.get('role_applied', '')
 
-    ok, message = submit_application(
-        first_name, last_name, email, role_applied, clerk_user_id
+    ok, message, view_token = submit_application(
+        first_name, last_name, email, role_applied
     )
     if not ok:
         if wants_json():
@@ -382,34 +524,49 @@ def apply_submit():
         return render_react('apply', error=message,
                             first_name=first_name, last_name=last_name,
                             email=email, role_applied=role_applied)
+    status_url = url_for('apply_status', token=view_token)
     if wants_json():
-        return jsonify({'ok': True, 'redirect': url_for('apply_status')})
-    return redirect(url_for('apply_status'))
+        return jsonify({'ok': True, 'redirect': status_url})
+    return redirect(status_url)
 
 
 @app.route('/apply/status')
 def apply_status():
-    clerk_user_id = verify_clerk_session(request)
-    applications = _rows_to_dicts(
-        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
-    )
+    token = (request.args.get('token') or '').strip()
+    logged_in = 'user_id' in session
+    if token:
+        rows = get_applications_for_view_token(token)
+    elif logged_in:
+        rows = get_applications_for_user_id(session['user_id'])
+    else:
+        rows = []
+    applications = _rows_to_dicts(rows)
+    missing_token = not token and not logged_in
     return render_react('apply_status',
                         applications=applications,
-                        signed_in=bool(clerk_user_id))
+                        token=token,
+                        missing_token=missing_token,
+                        logged_in=logged_in)
 
 
 @app.route('/apply/status.json')
 def apply_status_json():
-    """JSON variant used by the React ApplyStatus page when the initial HTML
-    response wasn't able to verify the Clerk session server-side (e.g. the
-    `__session` cookie wasn't sent on the initial GET)."""
-    clerk_user_id = verify_clerk_session(request)
-    applications = _rows_to_dicts(
-        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
-    )
+    """JSON for ApplyStatus: optional ?token=, or session when logged in."""
+    token = (request.args.get('token') or '').strip()
+    logged_in = 'user_id' in session
+    if token:
+        rows = get_applications_for_view_token(token)
+    elif logged_in:
+        rows = get_applications_for_user_id(session['user_id'])
+    else:
+        rows = []
+    applications = _rows_to_dicts(rows)
+    missing_token = not token and not logged_in
     return jsonify({
-        'signed_in': bool(clerk_user_id),
         'applications': applications,
+        'token': token,
+        'missing_token': missing_token,
+        'logged_in': logged_in,
     })
 
 
@@ -432,6 +589,7 @@ def registrar_applications():
     return render_react('registrar_applications',
                         role=session['role'],
                         username=session['username'],
+                        mail_configured=is_mail_configured(),
                         **_applications_payload(issued))
 
 
@@ -443,9 +601,9 @@ def registrar_approve_application(application_id):
         issued = {
             'user_id': result['user_id'],
             'username': result['username'],
-            'temp_password': result['temp_password'],
             'role': result['role'],
             'email': result['email'],
+            'account_activated': True,
         }
     else:
         issued = {'error': result.get('message', 'Approval failed.')}
@@ -558,9 +716,17 @@ def change_password_submit():
         return _pw_error(message)
 
     session.pop('must_change_password', None)
+    conn = get_db()
+    ao = conn.execute(
+        "SELECT IFNULL(applicant_only, 0) AS applicant_only FROM users WHERE id = ?",
+        (session['user_id'],),
+    ).fetchone()
+    conn.close()
+    applicant_only = int(ao['applicant_only'] if ao else 0)
+    next_url = url_for('apply_status') if applicant_only == 1 else url_for('dashboard')
     if wants_json():
-        return jsonify({'ok': True, 'redirect': url_for('dashboard')})
-    return redirect(url_for('dashboard'))
+        return jsonify({'ok': True, 'redirect': next_url})
+    return redirect(next_url)
 
 
 # ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -573,7 +739,7 @@ def dashboard():
     semester = get_active_semester()
     student_data = None
     grades = []
-    grad_app = None 
+    grad_app = None
     if session['role'] == 'student':
         student_data = conn.execute(
             """SELECT u.*, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
@@ -637,20 +803,20 @@ def profile():
     if session['role'] == 'student':
         student = conn.execute("SELECT * FROM students WHERE id = ?", (session['user_id'],)).fetchone()
     conn.close()
-    
+
     # show tutorial only once
     show_tutorial = session.get('role') == 'student' and not session.get('tutorial_done')
     if show_tutorial:
         session['tutorial_done'] = True
-    
+
     return render_react('profile',
                         username=session['username'],
                         role=session['role'],
                         user=dict(user) if user else None,
                         student=dict(student) if student else None,
                         show_tutorial=show_tutorial)
-    
-    
+
+
 #start of Tanzina's code
 # ── COURSES / REGISTRATION ────────────────────────────────────────────────────
 
@@ -687,7 +853,7 @@ def course_registration():
         courses = []
     
     enrolled = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
+        """SELECT c.*, u.username as instructor_name
            FROM enrollments e
            JOIN courses c ON e.course_id = c.id
            LEFT JOIN users u ON c.instructor_id = u.id
@@ -696,7 +862,7 @@ def course_registration():
         (session['user_id'], semester['id'])
     ).fetchall()
     cancelled_courses = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
+        """SELECT c.*, u.username as instructor_name
            FROM enrollments e
            JOIN courses c ON e.course_id = c.id
            LEFT JOIN users u ON c.instructor_id = u.id
@@ -723,7 +889,7 @@ def course_registration():
                         cancelled_courses=_rows_to_dicts(cancelled_courses),
                         waitlisted=_rows_to_dicts(waitlisted),
                         special_registration=bool(special_registration))
-    
+
 @app.route('/instructor/courses')
 def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -875,7 +1041,7 @@ def retreat_semester():
     semester = conn.execute("SELECT * FROM semesters WHERE id = ?", (semester_id,)).fetchone()
     current = semester['current_period']
     PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
-    
+
     if current == 'setup':
         # Try to go back to previous semester's grading period
         prev_semester = conn.execute(
@@ -900,7 +1066,7 @@ def retreat_semester():
         )
         conn.commit()
         message = f'Moved back to {prev_period}'
-    
+
     semester = get_active_semester()
     conn.close()
     return render_react('manage',
@@ -995,8 +1161,8 @@ def graduation_resolve_page():
         return redirect(url_for('home'))
     conn = get_db()
     applications = conn.execute(
-        """SELECT ga.*, u.username, 
-           (SELECT COUNT(*) FROM grades g 
+        """SELECT ga.*, u.username,
+           (SELECT COUNT(*) FROM grades g
             JOIN enrollments e ON g.student_id = e.student_id AND g.course_id = e.course_id
             WHERE g.student_id = ga.student_id AND g.letter_grade != 'F') as credits_earned
            FROM graduation_applications ga
@@ -1044,9 +1210,18 @@ def class_detail(course_id):
     if session['role'] == 'instructor' and course['instructor_id'] != session['user_id']:
         conn.close()
         return "Access denied — this course is not assigned to you", 403
-    
+    if session['role'] == 'student':
+        enr = conn.execute(
+            """SELECT 1 FROM enrollments
+               WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+            (session['user_id'], course_id),
+        ).fetchone()
+        if not enr:
+            conn.close()
+            return "Access denied — you are not enrolled in this course", 403
+
     enrolled = conn.execute(
-        """SELECT u.id, u.username, g.letter_grade 
+        """SELECT u.id, u.username, g.letter_grade
            FROM enrollments e JOIN users u ON e.student_id = u.id
            LEFT JOIN grades g ON g.student_id = u.id AND g.course_id = ?
            WHERE e.course_id = ? AND e.status = 'enrolled'""",
@@ -1075,7 +1250,7 @@ def class_detail(course_id):
 def submit_grade_route(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
+
     student_id = int(request.form['student_id'])
     letter_grade = request.form['letter_grade']
     message = submit_grade(session['user_id'], student_id, course_id, letter_grade)
@@ -1241,7 +1416,7 @@ def view_reviews(course_id):
         return redirect(url_for('home'))
     conn = get_db()
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
- 
+
     # Check if this student was ever enrolled (for showing/hiding the form)
     was_enrolled = None
     already_reviewed = None
@@ -1254,7 +1429,7 @@ def view_reviews(course_id):
             "SELECT id FROM reviews WHERE student_id = ? AND course_id = ?",
             (session['user_id'], course_id)
         ).fetchone()
- 
+
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)

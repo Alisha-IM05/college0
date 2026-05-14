@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flag AI Response - College0</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f3f6fc;
+  color: #333;
+}
+.navbar {
+  height: 64px;
+  margin: 28px 48px 0;
+  padding: 0 36px;
+  background: #223f66;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand { font-size: 24px; font-weight: 700; }
+.nav-right { color: #b7c4d5; font-size: 15px; }
+.nav-right a { color: #b7c4d5; text-decoration: none; margin-left: 6px; }
+.page { max-width: 1120px; margin: 0 auto; padding: 26px 44px 34px; }
+h1 { color: #223f66; margin: 0 0 4px; font-size: 30px; }
+.subtitle { margin: 0 0 16px; color: #666; font-size: 17px; }
+.divider { border: 0; border-top: 2px solid #dfe7f2; margin: 0 0 10px; }
+h2 { margin: 0 0 8px; font-size: 18px; }
+.flagged-card {
+  background: white;
+  border: 2px solid #dfe7f2;
+  border-radius: 10px;
+  padding: 14px 34px;
+  margin-bottom: 18px;
+}
+.row { display: flex; gap: 20px; align-items: center; margin: 8px 0; }
+.label { min-width: 62px; color: #777; font-weight: 700; }
+.source-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.local { background: #e4f5e9; color: #267640; }
+.llm { background: #fff3cd; color: #7b5c0b; }
+.reason-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 28px;
+  margin: 8px 0 18px;
+}
+.reason-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  border: 2px solid #cbdcf0;
+  border-radius: 8px;
+  background: white;
+  padding: 8px 14px;
+  color: #666;
+  font-weight: 700;
+  cursor: pointer;
+}
+.reason-option.selected { border-color: #223f66; color: #223f66; }
+.reason-option input { accent-color: #223f66; width: 18px; height: 18px; }
+.details-label { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+.details-label span { margin-left: 8px; }
+textarea {
+  width: 100%;
+  min-height: 110px;
+  border: 2px solid #cbdcf0;
+  border-radius: 10px;
+  padding: 16px 30px;
+  font: inherit;
+  font-size: 16px;
+  resize: vertical;
+}
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+}
+.cancel, .submit {
+  min-width: 190px;
+  border-radius: 8px;
+  padding: 14px 26px;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+}
+.cancel {
+  color: #c84742;
+  background: #fdecea;
+  border: 2px solid #df6d67;
+  text-decoration: none;
+}
+.submit {
+  background: #223f66;
+  color: white;
+  border: 0;
+  cursor: pointer;
+}
+.submit:disabled { opacity: .55; cursor: default; }
+.footer { margin-top: 50px; color: #aaa; font-size: 13px; }
+@media (max-width: 900px) {
+  .navbar { margin: 0; }
+  .page { padding: 22px 18px; }
+  .reason-grid { grid-template-columns: 1fr; gap: 10px; }
+  .actions { gap: 12px; flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="brand">College0</div>
+  <div class="nav-right">Welcome, {{ username }} <a href="/logout">Logout</a></div>
+</nav>
+
+<main class="page">
+  <h1>Flag AI Response</h1>
+  <p class="subtitle">Help us improve by reporting responses that are inaccurate, harmful, or inappropriate.</p>
+  <hr class="divider">
+
+  <h2>Response Being Flagged</h2>
+  <section class="flagged-card">
+    <div class="row">
+      <span class="label">Query:</span>
+      <span>{{ query.query_text }}</span>
+    </div>
+    <div class="row">
+      <span class="label">Source:</span>
+      {% if query.source == 'vector_db' %}
+      <span class="source-badge local">Local Database</span>
+      {% else %}
+      <span class="source-badge llm">LLM Response</span>
+      {% endif %}
+    </div>
+  </section>
+
+  <form method="POST" action="/ai/query/{{ query.id }}/flag" id="flagForm">
+    <h2>Reason for Flagging</h2>
+    <div class="reason-grid">
+      <label class="reason-option">
+        <input type="radio" name="category" value="Inaccurate information" required>
+        Inaccurate information
+      </label>
+      <label class="reason-option">
+        <input type="radio" name="category" value="Inappropriate language">
+        Inappropriate language
+      </label>
+      <label class="reason-option">
+        <input type="radio" name="category" value="Irrelevant response">
+        Irrelevant response
+      </label>
+      <label class="reason-option">
+        <input type="radio" name="category" value="Other">
+        Other
+      </label>
+    </div>
+
+    <div class="details-label">Additional Details <span>(optional)</span></div>
+    <textarea name="details" placeholder="The response stated that the grading period ends May 15 but the actual deadline listed on the registrar page is May 10, 2026."></textarea>
+    <input type="hidden" name="reason" id="reasonField">
+
+    <div class="actions">
+      <a class="cancel" href="/ai/assistant">Cancel</a>
+      <button class="submit" type="submit" id="submitBtn" disabled>Submit Flag</button>
+    </div>
+  </form>
+
+  <p class="footer">Flagged responses are reviewed by the registrar. Repeated false flags may result in a warning.</p>
+</main>
+
+<script>
+var radios = document.querySelectorAll('input[name="category"]');
+var submitBtn = document.getElementById('submitBtn');
+
+radios.forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    document.querySelectorAll('.reason-option').forEach(function(option) {
+      option.classList.remove('selected');
+    });
+    radio.closest('.reason-option').classList.add('selected');
+    submitBtn.disabled = false;
+  });
+});
+
+document.getElementById('flagForm').addEventListener('submit', function() {
+  var category = document.querySelector('input[name="category"]:checked');
+  var details = document.querySelector('textarea[name="details"]').value.trim();
+  var reason = category ? category.value : '';
+  if (details) reason += ': ' + details;
+  document.getElementById('reasonField').value = reason;
+});
+</script>
+</body>
+</html>
