@@ -495,6 +495,24 @@ def mark_fine_paid(user_id):
     conn.close()
     return "success:Fine marked as paid."
 
+# dismiss
+def dismiss_complaint(complaint_id):
+    """Registrar dismisses an irrelevant complaint with no warning issued."""
+    conn = get_connection()
+    complaint = conn.execute(
+        "SELECT * FROM complaints WHERE id = ? AND status = 'pending'",
+        (complaint_id,)
+    ).fetchone()
+    if not complaint:
+        conn.close()
+        return "error:Complaint not found or already resolved."
+    conn.execute(
+        "UPDATE complaints SET status = 'resolved', resolution = 'Dismissed by registrar — complaint deemed irrelevant.' WHERE id = ?",
+        (complaint_id,)
+    )
+    conn.commit()
+    conn.close()
+    return "success:Complaint dismissed."
 
 # ── SEED DATA FOR DEMO ────────────────────────────────────────────────────────
 

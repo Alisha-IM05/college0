@@ -549,13 +549,10 @@ def enforce_minimums(semester_id):
                     )
                 # Warn the instructor
                 conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
+                    """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
                     (
                         course['instructor_id'],
-                        'Your course was cancelled due to low enrollment'
+                        'Warning: You are enrolled in fewer than 2 active courses this semester.'
                     )
                 )
         # Get all instructors who taught courses this semester
@@ -616,7 +613,7 @@ def enforce_minimums(semester_id):
         ).fetchall()
         for s in affected_students:
             conn.execute(
-                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
+                """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
                 (s['student_id'],
                  'One or more of your courses was cancelled. Special registration is now open for you.')
             )
