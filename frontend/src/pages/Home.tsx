@@ -29,7 +29,7 @@ export function Home(): React.ReactElement {
 
       {/* ── NAVBAR ── */}
       <div className="navbar">
-        <h1>College<span style={{ color: '#93c5fd' }}>0</span></h1>
+        <h1 style={{ color: 'white', textShadow: '0 1px 3px rgba(0,0,0,.3)' }}>College<span style={{ color: '#fbbf24' }}>0</span></h1>
         <div>
           <a href="/login">Sign In</a>
           <a href="/apply" style={{ marginLeft: 16, background: 'white', color: '#2E4A7A', padding: '6px 16px', borderRadius: 6, fontWeight: 600 }}>Apply</a>
@@ -38,46 +38,33 @@ export function Home(): React.ReactElement {
 
       {/* ── HERO ── */}
       <div style={{ background: 'linear-gradient(135deg, #2E4A7A 0%, #3d5f99 100%)', color: 'white', padding: '80px 40px' }}>
-        <div style={{ maxWidth: 900, margin: '0 auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 60, alignItems: 'center' }}>
-          <div>
-            <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', opacity: .6, marginBottom: 12 }}>CCNY · Software Engineering</p>
-            <h1 style={{ color: 'white', fontSize: 42, lineHeight: 1.15, marginBottom: 20, fontWeight: 800 }}>
-              A smarter system for college program management.
-            </h1>
-            <p style={{ opacity: .75, fontSize: 16, lineHeight: 1.7, marginBottom: 32 }}>
-              One shared workspace for students, instructors, and registrars — from course setup through graduation.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 32 }}>
-              {['4 semester phases', 'Role-based dashboards', 'AI recommendations', 'Conduct system'].map(f => (
-                <span key={f} style={{ background: 'rgba(255,255,255,.15)', border: '1px solid rgba(255,255,255,.25)', padding: '5px 14px', borderRadius: 99, fontSize: 13 }}>{f}</span>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              <a href="/apply?role=student" style={{ background: 'white', color: '#2E4A7A', padding: '10px 24px', borderRadius: 6, fontWeight: 700, textDecoration: 'none', fontSize: 14 }}>Apply as Student</a>
-              <a href="/apply?role=instructor" style={{ background: 'rgba(255,255,255,.15)', color: 'white', padding: '10px 24px', borderRadius: 6, fontWeight: 600, textDecoration: 'none', fontSize: 14, border: '1px solid rgba(255,255,255,.3)' }}>Apply as Instructor</a>
-              <a href="/apply/status" style={{ color: 'rgba(255,255,255,.7)', padding: '10px 16px', borderRadius: 6, fontWeight: 500, textDecoration: 'none', fontSize: 14 }}>Check Status →</a>
-            </div>
-          </div>
-
-          {/* Role cards */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[
-              { role: 'Student', icon: '🎓', desc: 'Registration, progress, support.' },
-              { role: 'Instructor', icon: '👨‍🏫', desc: 'Courses, students, grading.' },
-              { role: 'Registrar', icon: '🏛️', desc: 'Applications, policy, oversight.' },
-            ].map(r => (
-              <a key={r.role} href="/login" style={{ background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)', borderRadius: 10, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, textDecoration: 'none', color: 'white', transition: 'background .2s' }}
-                onMouseOver={e => (e.currentTarget.style.background = 'rgba(255,255,255,.18)')}
-                onMouseOut={e => (e.currentTarget.style.background = 'rgba(255,255,255,.1)')}
-              >
-                <div style={{ width: 44, height: 44, background: 'rgba(255,255,255,.15)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{r.icon}</div>
-                <div>
-                  <div style={{ fontWeight: 700, marginBottom: 2 }}>{r.role}</div>
-                  <div style={{ opacity: .65, fontSize: 13 }}>{r.desc}</div>
-                </div>
-                <div style={{ marginLeft: 'auto', opacity: .5 }}>→</div>
-              </a>
+        <div style={{ maxWidth: 700, margin: '0 auto', textAlign: 'center' }}>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', opacity: .6, marginBottom: 12 }}>CCNY · Software Engineering</p>
+          <h1 style={{ color: 'white', fontSize: 42, lineHeight: 1.15, marginBottom: 20, fontWeight: 800 }}>
+            A smarter system for college program management.
+          </h1>
+          <p style={{ opacity: .75, fontSize: 16, lineHeight: 1.7, marginBottom: 32 }}>
+            One shared workspace for students, instructors, and registrars — from course setup through graduation.
+          </p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 32, justifyContent: 'center' }}>
+            {['4 semester phases', 'Role-based dashboards', 'AI recommendations', 'Conduct system'].map(f => (
+              <span key={f} style={{ background: 'rgba(255,255,255,.15)', border: '1px solid rgba(255,255,255,.25)', padding: '5px 14px', borderRadius: 99, fontSize: 13 }}>{f}</span>
             ))}
+          </div>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 32 }}>
+            <a href="/apply?role=student" style={{ background: 'white', color: '#2E4A7A', padding: '10px 24px', borderRadius: 6, fontWeight: 700, textDecoration: 'none', fontSize: 14 }}>Apply as Student</a>
+            <a href="/apply?role=instructor" style={{ background: 'rgba(255,255,255,.15)', color: 'white', padding: '10px 24px', borderRadius: 6, fontWeight: 600, textDecoration: 'none', fontSize: 14, border: '1px solid rgba(255,255,255,.3)' }}>Apply as Instructor</a>
+            <a href="/apply/status" style={{ color: 'rgba(255,255,255,.7)', padding: '10px 16px', borderRadius: 6, fontWeight: 500, textDecoration: 'none', fontSize: 14 }}>Check Status →</a>
+          </div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,.15)', paddingTop: 28 }}>
+            <div style={{ opacity: .75, fontSize: 15, marginBottom: 16 }}>Already have an account? Sign in to access your dashboard.</div>
+            <a href="/login"
+              style={{ background: 'white', color: '#2E4A7A', padding: '14px 40px', borderRadius: 10, fontWeight: 700, textDecoration: 'none', fontSize: 16, display: 'inline-flex', alignItems: 'center', gap: 10 }}
+              onMouseOver={e => (e.currentTarget.style.opacity = '0.9')}
+              onMouseOut={e => (e.currentTarget.style.opacity = '1')}
+            >
+              🔐 Sign In
+            </a>
           </div>
         </div>
       </div>
