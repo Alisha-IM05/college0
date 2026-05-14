@@ -18,7 +18,8 @@ from modules.conduct import (
     get_pending_complaints, resolve_student_complaint, resolve_instructor_complaint,
     get_taboo_words, add_taboo_word, remove_taboo_word,
     get_user_warnings, get_warning_count, issue_warning,
-    seed_conduct_data, mark_fine_paid, dismiss_complaint
+    seed_conduct_data, mark_fine_paid, dismiss_complaint,
+    get_suspension_info, submit_fine_payment, approve_fine_payment
 )
 from modules.semester import (
     advance_period, create_course, register_student,
@@ -84,6 +85,7 @@ _PAGE_TITLES = {
     'my_reviews':        'College0 — Reviews',
     'home':              'College0 — AI-Enabled College Management',
     'profile':           'College0 — My Profile',
+    'suspended':         'College0 — Account Suspended',
 }
 
 
@@ -125,6 +127,7 @@ def _rows_to_dicts(rows):
 _ALLOWED_DURING_PW_CHANGE = {
     'change_password_page', 'change_password_submit',
     'logout', 'static', 'apply_status', 'apply_page', 'apply_submit',
+    'suspension_page', 'suspension_pay',
 }
 
 
@@ -132,27 +135,79 @@ _ALLOWED_DURING_PW_CHANGE = {
 def enforce_password_change():
     """UC-11: once a user is logged in with a temporary password, every
     request must redirect to /change-password until they pick a new one.
-    This guards routes that don't use the @require_role decorator."""
+    Also redirects suspended users to /suspension for all routes except
+    the suspension page itself, logout, and static assets."""
     if 'user_id' not in session:
         return None
-    if request.endpoint in _ALLOWED_DURING_PW_CHANGE:
+
+    # Routes suspended users are allowed to visit
+    _SUSPENSION_ALLOWED = {'suspension_page', 'suspension_pay', 'logout', 'static'}
+    if request.endpoint in _SUSPENSION_ALLOWED:
         return None
+
     conn = get_db()
     row = conn.execute(
-        "SELECT must_change_password, status FROM users WHERE id = ?",
+        "SELECT must_change_password, status, role FROM users WHERE id = ?",
         (session['user_id'],),
     ).fetchone()
     conn.close()
+
     if row is None:
         session.clear()
         return redirect(url_for('home'))
+
+    # Always sync role from DB — this ensures reactivation by registrar
+    # is reflected in the session on the very next request, without requiring re-login.
+    session['role'] = row['role']
+
+    # Redirect suspended users to the suspension page
+    if row['status'] == 'suspended' or row['role'] == 'suspended':
+        session['role'] = 'suspended'   # keep session in sync
+        if request.endpoint not in _ALLOWED_DURING_PW_CHANGE:
+            return redirect(url_for('suspension_page'))
+        return None
+
+    if request.endpoint in _ALLOWED_DURING_PW_CHANGE:
+        return None
+
     if row['status'] != 'active':
         session.clear()
         return redirect(url_for('home'))
+
     if row['must_change_password']:
         session['must_change_password'] = True
         return redirect(url_for('change_password_page'))
+
     return None
+
+
+# ── SUSPENSION ROUTES ────────────────────────────────────────────────────────
+
+@app.route('/suspension')
+def suspension_page():
+    """Dedicated page for suspended users — shows fine, warnings, pay button."""
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    info = get_suspension_info(session['user_id'])
+    return render_react('suspended',
+                        username=session.get('username', ''),
+                        role='suspended',
+                        warning_count=info['warning_count'],
+                        warnings=info['warnings'],
+                        fine=info['fine'])
+
+
+@app.route('/suspension/pay', methods=['POST'])
+def suspension_pay():
+    """User submits fine payment — marks fine as paid, awaits registrar approval."""
+    if 'user_id' not in session:
+        return redirect(url_for('home'))
+    ok, message = submit_fine_payment(session['user_id'])
+    if wants_json():
+        return jsonify({'ok': ok, 'message': message})
+    return redirect(url_for('suspension_page'))
+
+
 
 # initialize the database when the app starts
 with app.app_context():
@@ -232,14 +287,19 @@ def login():
 
     if not user:
         return _login_error("Invalid username or password.")
-    if user['status'] == 'suspended':
-        return _login_error("Your account is suspended. Please contact the registrar.")
     if user['status'] == 'terminated':
         return _login_error("Your account has been terminated. Please contact the registrar.")
 
     session['user_id']  = user['id']
     session['username'] = user['username']
     session['role']     = user['role']
+
+    # Suspended users are allowed to log in — they get redirected to /suspension
+    # by the before_request hook, where they can pay their fine.
+    if user['status'] == 'suspended':
+        if wants_json():
+            return jsonify({'ok': True, 'redirect': url_for('suspension_page')})
+        return redirect(url_for('suspension_page'))
 
     if user['must_change_password']:
         session['must_change_password'] = True
@@ -418,8 +478,16 @@ def registrar_reject_application(application_id):
 @require_role('registrar')
 def registrar_users():
     users = _rows_to_dicts(list_manageable_users())
+    # Fetch pending fines so registrar can see who has submitted payment
+    conn = get_db()
+    pending_fines = conn.execute(
+        "SELECT user_id FROM fines WHERE paid = 1 AND approved = 0"
+    ).fetchall()
+    conn.close()
+    pending_fine_user_ids = [row['user_id'] for row in pending_fines]
     return render_react('registrar_users',
                         users=users,
+                        pending_fine_user_ids=pending_fine_user_ids,
                         message=session.pop('user_action_message', None),
                         role=session['role'],
                         username=session['username'])
@@ -434,6 +502,8 @@ def registrar_user_action(user_id, action):
         ok, message = terminate_user(user_id)
     elif action == 'reactivate':
         ok, message = reactivate_user(user_id)
+    elif action == 'approve_fine':
+        ok, message = approve_fine_payment(user_id)
     else:
         ok, message = False, "Unknown action."
 

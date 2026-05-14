@@ -86,6 +86,12 @@ export interface PageData {
   reviewed?: ApplicationRow[];
   issued?: IssuedCredentials | null;
   users?: UserRow[];
+  pending_fine_user_ids?: number[];
+
+  // suspension page
+  warning_count?: number;
+  warnings?: { reason: string; created_at: string }[];
+  fine?: { amount: number; paid: number; approved: number; reason: string } | null;
 
   // change password
   must_change?: boolean;

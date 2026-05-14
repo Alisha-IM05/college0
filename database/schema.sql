@@ -169,6 +169,19 @@ CREATE TABLE IF NOT EXISTS complaints (
     FOREIGN KEY (filed_against) REFERENCES users(id)
 );
  
+CREATE TABLE IF NOT EXISTS fines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount REAL NOT NULL DEFAULT 200.00,
+    reason TEXT NOT NULL,
+    paid INTEGER NOT NULL DEFAULT 0,        -- 0 = outstanding, 1 = payment submitted by user
+    approved INTEGER NOT NULL DEFAULT 0,    -- 0 = pending registrar approval, 1 = approved
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    paid_at TIMESTAMP,
+    approved_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,

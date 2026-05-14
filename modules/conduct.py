@@ -254,20 +254,123 @@ def get_warning_count(user_id):
     return count
 
 def suspend_user(user_id, reason):
-    """Suspends a user by updating their role to suspended"""
+    """
+    Suspends a user. Sets role AND status to 'suspended' so the frontend
+    gate can redirect them to /suspension regardless of which field it checks.
+    J-027: records a $200 fine in the fines table.
+    """
     conn = get_connection()
+
+    # Only suspend if not already suspended (avoid duplicate fines)
+    user = conn.execute("SELECT role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user and user['status'] == 'suspended':
+        conn.close()
+        return
+
     conn.execute(
         "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
         (user_id,)
     )
-    # J-027: record fine owed by suspended student
+
+    # J-027: $200 disciplinary fine
     conn.execute(
-        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
-        (user_id, "FINE OWED: $200 suspension fine issued. Contact the registrar to pay and have your account reinstated.")
+        "INSERT INTO fines (user_id, amount, reason, paid, approved) VALUES (?, 200.00, ?, 0, 0)",
+        (user_id, reason)
     )
     conn.commit()
     conn.close()
-    print(f"User {user_id} has been suspended. Reason: {reason}")
+
+
+def get_suspension_info(user_id):
+    """
+    Returns a dict with everything the suspension page needs:
+    - warning_count, warnings list, fine (amount, paid, approved), suspension reason
+    """
+    conn = get_connection()
+
+    warning_count = conn.execute(
+        "SELECT COUNT(*) as total FROM warnings WHERE user_id = ?", (user_id,)
+    ).fetchone()['total']
+
+    warnings = conn.execute(
+        "SELECT reason, created_at FROM warnings WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,)
+    ).fetchall()
+
+    fine = conn.execute(
+        "SELECT * FROM fines WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    conn.close()
+
+    return {
+        'warning_count': warning_count,
+        'warnings': [dict(w) for w in warnings],
+        'fine': dict(fine) if fine else None,
+    }
+
+
+def submit_fine_payment(user_id):
+    """
+    User clicks 'Pay Fine' — marks the fine as paid (submitted).
+    Account stays suspended until registrar approves (approved = 1).
+    """
+    conn = get_connection()
+    fine = conn.execute(
+        "SELECT id FROM fines WHERE user_id = ? AND approved = 0 ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    if not fine:
+        conn.close()
+        return False, "No outstanding fine found."
+
+    conn.execute(
+        "UPDATE fines SET paid = 1, paid_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (fine['id'],)
+    )
+    conn.commit()
+    conn.close()
+    return True, "Payment submitted. Your account will be reactivated once the registrar approves."
+
+
+def approve_fine_payment(user_id):
+    """
+    Registrar approves the fine payment — marks approved, clears all warnings,
+    and restores the account to active. Wiping warnings resets the count to 0
+    so the warnings page shows a clean slate.
+    """
+    conn = get_connection()
+    fine = conn.execute(
+        "SELECT id FROM fines WHERE user_id = ? AND paid = 1 AND approved = 0 ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    if not fine:
+        conn.close()
+        return False, "No pending fine payment found for this user."
+
+    # Approve the fine
+    conn.execute(
+        "UPDATE fines SET approved = 1, approved_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (fine['id'],)
+    )
+
+    # Wipe all warnings so the slate is clean
+    conn.execute("DELETE FROM warnings WHERE user_id = ?", (user_id,))
+
+    # Restore the correct role
+    in_students = conn.execute("SELECT id FROM students WHERE id = ?", (user_id,)).fetchone()
+    restored_role = 'student' if in_students else 'instructor'
+
+    conn.execute(
+        "UPDATE users SET status = 'active', role = ? WHERE id = ?",
+        (restored_role, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return True, f"Fine approved. Account reactivated as {restored_role}."
 
 
 # ── COMPLAINT FUNCTIONS ───────────────────────────────────────────────────────
