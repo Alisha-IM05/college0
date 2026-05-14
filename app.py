@@ -19,7 +19,7 @@ from modules.conduct import (
     get_pending_complaints, resolve_student_complaint, resolve_instructor_complaint,
     get_taboo_words, add_taboo_word, remove_taboo_word,
     get_user_warnings, get_warning_count, issue_warning,
-    seed_conduct_data, mark_fine_paid
+    seed_conduct_data, mark_fine_paid, dismiss_complaint
 )
 from modules.semester import (
     advance_period, create_course, register_student,
@@ -786,21 +786,13 @@ def instructor_courses():
     semester = get_active_semester()
     courses = conn.execute(
         """SELECT c.*, s.name as semester_name, s.current_period,
-           (SELECT COUNT(*) FROM waitlist w
-            WHERE w.course_id = c.id AND w.status = 'pending') as waitlist_count
+           (SELECT COUNT(*) FROM waitlist w WHERE w.course_id = c.id) as waitlist_count,
+           (SELECT COUNT(*) FROM grades g WHERE g.course_id = c.id) as graded_count
            FROM courses c JOIN semesters s ON c.semester_id = s.id
-           WHERE c.instructor_id = ? AND c.semester_id = ?""",
+           WHERE c.instructor_id = ? AND c.semester_id = ?
+           ORDER BY c.status ASC, c.course_name ASC""",
         (session['user_id'], semester['id'])
     ).fetchall()
-    enrolled_counts = {}
-    if semester and semester['current_period'] == 'grading':
-        for course in courses:
-            count = conn.execute(
-                """SELECT COUNT(*) as count FROM grades
-                WHERE course_id = ?""",
-                (course['id'],)
-            ).fetchone()['count']
-            enrolled_counts[course['id']] = count
     conn.close()
     return render_react('instructor_courses',
                         username=session['username'],
@@ -895,13 +887,23 @@ def advance_semester():
         summary = enforce_minimums(semester_id)
         message = summary
     conn = get_db()
+    # Auto-reject all waitlist entries when semester moves to running
+    semester_check = get_active_semester()
+    if semester_check and semester_check['current_period'] == 'running':
+        conn.execute("DELETE FROM waitlist WHERE course_id IN (SELECT id FROM courses WHERE semester_id = ?)", (semester_id,))
+        conn.commit()
     semester = get_active_semester()
+    special_reg_students = _rows_to_dicts(conn.execute(
+        """SELECT u.username FROM users u JOIN students s ON s.id = u.id
+           WHERE s.special_registration = 1"""
+    ).fetchall())
     conn.close()
     return render_react('manage',
                         username=session['username'],
                         role=session['role'],
                         semester=dict(semester) if semester else None,
-                        message=message)
+                        message=message,
+                        special_reg_students=special_reg_students)
 
 @app.route('/semester/retreat', methods=['POST'])
 def retreat_semester():
@@ -1135,7 +1137,7 @@ def reject_waitlist_route(course_id):
     conn = get_db()
     # Remove from waitlist
     conn.execute(
-        "UPDATE waitlist SET status = 'denied' WHERE student_id = ? AND course_id = ?",
+        "DELETE FROM waitlist WHERE student_id = ? AND course_id = ?",
         (student_id, course_id)
     )
     # Issue notification via warning
@@ -1456,6 +1458,21 @@ def resolve_instructor_complaint_route(complaint_id):
                         message=message,
                         message_type=status)
 
+#dismiss
+@app.route('/complaints/dismiss/<int:complaint_id>', methods=['POST'])
+def dismiss_complaint_route(complaint_id):
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    result = dismiss_complaint(complaint_id)
+    status, message = result.split(':', 1)
+    complaints = get_pending_complaints()
+    return render_template('conduct/complaints.html',
+                           complaints=complaints,
+                           role='registrar',
+                           username=session['username'],
+                           all_users=[],
+                           message=message,
+                           message_type=status)
 
 # ── TABOO WORDS (registrar only) ──────────────────────────────────────────────
 

@@ -3,8 +3,13 @@ from database.db import get_db
 
 
 PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
-GPA_MAP = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
-
+GPA_MAP = {
+    'A+': 4.0, 'A': 4.0, 'A-': 3.7,
+    'B+': 3.3, 'B': 3.0, 'B-': 2.7,
+    'C+': 2.3, 'C': 2.0, 'C-': 1.7,
+    'D+': 1.3, 'D': 1.0, 'D-': 0.7,
+    'F': 0.0
+}
 
 def get_current_semester():
     """Returns the active semester — newest non-completed semester first."""
@@ -549,13 +554,10 @@ def enforce_minimums(semester_id):
                     )
                 # Warn the instructor
                 conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
+                    """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
                     (
                         course['instructor_id'],
-                        'Your course was cancelled due to low enrollment'
+                        'Warning: You are enrolled in fewer than 2 active courses this semester.'
                     )
                 )
         # Get all instructors who taught courses this semester
@@ -616,7 +618,7 @@ def enforce_minimums(semester_id):
         ).fetchall()
         for s in affected_students:
             conn.execute(
-                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
+                """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
                 (s['student_id'],
                  'One or more of your courses was cancelled. Special registration is now open for you.')
             )

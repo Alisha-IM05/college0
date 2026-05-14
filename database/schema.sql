@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS grades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id INTEGER NOT NULL,
     course_id INTEGER NOT NULL,
-    letter_grade TEXT CHECK(letter_grade IN ('A', 'B', 'C', 'D', 'F')),
+    letter_grade TEXT CHECK(letter_grade IN ('A+','A','A-','B+','B','B-','C+','C','C-','D+','D','D-','F')),
     numeric_value REAL,                 -- GPA equivalent: A=4.0, B=3.0, C=2.0, D=1.0, F=0.0
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES users(id),
@@ -169,7 +169,14 @@ CREATE TABLE IF NOT EXISTS complaints (
     FOREIGN KEY (filed_against) REFERENCES users(id)
 );
  
-
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    is_read INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 
 -- ============================================================
 -- ALMASUR — AI Feature & Creative Feature Tables
