@@ -31,7 +31,7 @@ export function Register(): React.ReactElement {
         </div>
       )}
  
-      {(semester?.current_period === 'registration' || specialRegistration) && (
+      {(semester?.current_period === 'registration' || (semester?.current_period === 'special_registration' && specialRegistration)) && (
         <div className="card" style={{ padding: 0, marginBottom: '1rem' }}>
           <table>
             <thead><tr><th>Course</th><th>Time Slot</th><th>Instructor</th><th>Spots</th><th>Action</th></tr></thead>

@@ -645,18 +645,25 @@ def course_registration():
             (session['user_id'],)
         ).fetchone()
         special_registration = sr and sr['special_registration'] == 1
-    courses = conn.execute(
-    """SELECT c.*, u.username as instructor_name,
-       c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
-       FROM courses c
-       LEFT JOIN users u ON c.instructor_id = u.id
-       WHERE c.status = 'active' AND c.semester_id = ?
-       AND c.id NOT IN (
-           SELECT course_id FROM enrollments
-           WHERE student_id = ? AND status = 'cancelled'
-       )""",
-    (semester['id'], session['user_id'])
-    ).fetchall()
+    current_period = semester['current_period'] if semester else None
+    can_register = (current_period == 'registration') or (current_period == 'special_registration' and special_registration)
+
+    if can_register:
+        courses = conn.execute(
+        """SELECT c.*, u.username as instructor_name,
+        c.time_slot || ' ' || c.start_time || '-' || c.end_time as display_slot
+        FROM courses c
+        LEFT JOIN users u ON c.instructor_id = u.id
+        WHERE c.status = 'active' AND c.semester_id = ?
+        AND c.id NOT IN (
+            SELECT course_id FROM enrollments
+            WHERE student_id = ? AND status = 'cancelled'
+        )""",
+        (semester['id'], session['user_id'])
+        ).fetchall()
+    else:
+        courses = []
+    
     enrolled = conn.execute(
         """SELECT c.*, u.username as instructor_name 
            FROM enrollments e
