@@ -597,13 +597,35 @@ def dashboard():
             ORDER BY id DESC LIMIT 1""",
             (session['user_id'],)
         ).fetchone()
+    all_students = []
+    all_instructors = []
+    if session['role'] == 'registrar':
+        all_students = conn.execute(
+            """SELECT u.username, u.email, u.status, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
+               FROM users u JOIN students s ON u.id = s.id
+               WHERE u.role = 'student'
+               ORDER BY s.cumulative_gpa DESC"""
+        ).fetchall()
+        all_instructors = conn.execute(
+            """SELECT u.username, u.status,
+               COUNT(c.id) as course_count,
+               AVG(g.numeric_value) as avg_class_gpa
+               FROM users u
+               LEFT JOIN courses c ON c.instructor_id = u.id AND c.semester_id = ?
+               LEFT JOIN grades g ON g.course_id = c.id
+               WHERE u.role = 'instructor'
+               GROUP BY u.id""",
+            (semester['id'] if semester else 0,)
+        ).fetchall()
     conn.close()
     return render_react('dashboard',
                         username=session['username'],
                         role=session['role'],
                         semester=dict(semester) if semester else None,
                         student_data=dict(student_data) if student_data else None,
-                        grades=_rows_to_dicts(grades))
+                        grades=_rows_to_dicts(grades),
+                        all_students=_rows_to_dicts(all_students),
+                        all_instructors=_rows_to_dicts(all_instructors))
     
 @app.route('/profile')
 def profile():
