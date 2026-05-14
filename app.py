@@ -1160,17 +1160,32 @@ def my_reviews_page():
                             role=session['role'],
                             courses=_rows_to_dicts(courses))
     else:
-        courses = conn.execute(
-            """SELECT c.id, c.course_name, c.time_slot,
-                      s.name as semester_name,
-                      AVG(r.star_rating) as avg_rating,
-                      COUNT(r.id) as review_count
-               FROM courses c
-               JOIN semesters s ON c.semester_id = s.id
-               LEFT JOIN reviews r ON r.course_id = c.id AND r.is_visible = 1
-               GROUP BY c.id
-               ORDER BY s.id DESC, c.course_name"""
-        ).fetchall()
+        # Registrar sees ALL reviews including hidden (is_visible=0) for moderation
+        if session['role'] == 'registrar':
+            courses = conn.execute(
+                """SELECT c.id, c.course_name, c.time_slot,
+                          s.name as semester_name,
+                          AVG(CASE WHEN r.is_visible=1 THEN r.star_rating END) as avg_rating,
+                          COUNT(r.id) as review_count,
+                          SUM(CASE WHEN r.is_visible=0 THEN 1 ELSE 0 END) as hidden_count
+                   FROM courses c
+                   JOIN semesters s ON c.semester_id = s.id
+                   LEFT JOIN reviews r ON r.course_id = c.id
+                   GROUP BY c.id
+                   ORDER BY s.id DESC, c.course_name"""
+            ).fetchall()
+        else:
+            courses = conn.execute(
+                """SELECT c.id, c.course_name, c.time_slot,
+                          s.name as semester_name,
+                          AVG(r.star_rating) as avg_rating,
+                          COUNT(r.id) as review_count
+                   FROM courses c
+                   JOIN semesters s ON c.semester_id = s.id
+                   LEFT JOIN reviews r ON r.course_id = c.id AND r.is_visible = 1
+                   GROUP BY c.id
+                   ORDER BY s.id DESC, c.course_name"""
+            ).fetchall()
         conn.close()
         return render_react('my_reviews',
                             username=session['username'],

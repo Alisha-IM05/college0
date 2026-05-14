@@ -200,40 +200,55 @@ def update_course_rating(course_id):
 
 # ── WARNING FUNCTIONS ─────────────────────────────────────────────────────────
 
-def issue_warning(user_id, reason):
+def _insert_warning_only(user_id, reason):
     """
-    J-021: centralized warning helper used by all modules.
-    J-022: counts warnings by user.
-    J-024: suspends student after 3 warnings.
-    J-029: suspends instructor after 3 warnings.
-    H-023: checks warning threshold after each warning insertion.
+    Inserts a warning record WITHOUT triggering the suspension check.
+    Use this for system-generated academic/administrative warnings
+    (e.g. underenrolled, probation GPA) that should not count toward
+    the 3-warning conduct suspension threshold.
     """
     conn = get_connection()
+    conn.execute(
+        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+        (user_id, reason)
+    )
+    conn.commit()
+    conn.close()
 
-    # save the warning
+
+def issue_warning(user_id, reason):
+    """
+    J-021: centralized conduct warning helper.
+    Inserts warning and checks threshold:
+      - Students: suspend_user() at 3 (fine required, registrar approves)
+      - Instructors: suspend_instructor() at 3 (no fine, wait for next semester)
+    Only use this for CONDUCT violations. For academic/admin notices
+    (underenrolled, GPA probation, missing grades) use _insert_warning_only().
+    """
+    conn = get_connection()
     conn.execute(
         "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
         (user_id, reason)
     )
     conn.commit()
 
-    # H-023 / J-022: count total warnings for this user
     count = conn.execute(
         "SELECT COUNT(*) as total FROM warnings WHERE user_id = ?",
         (user_id,)
     ).fetchone()['total']
 
-    # get the user's role
     user = conn.execute(
-        "SELECT role FROM users WHERE id = ?",
+        "SELECT role, status FROM users WHERE id = ?",
         (user_id,)
     ).fetchone()
 
     conn.close()
 
-    # J-024 / J-029: suspend at 3 warnings
-    if count >= 3 and user and user['role'] in ('student', 'instructor'):
-        suspend_user(user_id, "3 warnings accumulated — suspended for 1 semester")
+    if count >= 3 and user and user['status'] != 'suspended':
+        if user['role'] == 'student':
+            suspend_user(user_id, "3 conduct warnings accumulated — suspended for 1 semester")
+        elif user['role'] == 'instructor':
+            suspend_instructor(user_id, "3 conduct warnings accumulated — suspended until next semester")
 
 def get_user_warnings(user_id):
     """J-023: gets all warnings for a specific user"""
