@@ -19,3 +19,5 @@ pycache/
 *.pyc
 pycache/
 *.pyc
+.DS_Store
+database/college0.db
