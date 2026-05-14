@@ -424,9 +424,7 @@ body {
   <section class="chat-wrap">
 	    <div class="hero" id="hero">
 	      <h1>How can I help?</h1>
-      {% if role == 'registrar' and active_student_name %}
-      <div class="context-pill">Active student: {{ active_student_name }}</div>
-      {% endif %}
+
 	      <p>Ask about your courses, grades, recommendations, or College0 academic records.</p>
 	    </div>
     <div class="thread" id="thread"></div>
@@ -629,7 +627,11 @@ function buildRecommendations(cards) {
     btn.addEventListener('click', function() {
       btn.disabled = true;
       btn.textContent = 'Enrolling...';
-      fetch('/ai/enroll/' + card.id, {method: 'POST'})
+      fetch('/ai/enroll/' + card.id, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(card.student_id ? {student_id: card.student_id} : {})
+      })
         .then(function(response) { return response.json(); })
         .then(function(result) {
           if (result.ok) {

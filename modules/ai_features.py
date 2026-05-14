@@ -112,10 +112,23 @@ def submit_query(user_id, _session_role, query_text, active_student_id=None):
         target_student_id = find_student_reference(query_text) or active_student_id
 
     enrollment_action = parse_enrollment_action(query_text, effective_role, target_student_id)
+    drop_action = parse_drop_action(query_text, effective_role, target_student_id)
     if enrollment_action:
-        msg, ok = enroll_from_ai(enrollment_action["student_id"], enrollment_action["course_id"])
-        response_text = msg
-        source = "vector_db"
+        if enrollment_action.get("error"):
+            response_text = enrollment_action["error"]
+            source = "vector_db"
+        else:
+            msg, ok = enroll_from_ai(enrollment_action["student_id"], enrollment_action["course_id"])
+            response_text = msg
+            source = "vector_db"
+    elif drop_action:
+        if drop_action.get("error"):
+            response_text = drop_action["error"]
+            source = "vector_db"
+        else:
+            msg, ok = drop_from_ai(drop_action["student_id"], drop_action["course_id"])
+            response_text = msg
+            source = "vector_db"
     # K-016/K-019: If a student asks for recommendations, generate them inline
     elif effective_role == "student" and _is_recommendation_query(query_text):
         recs = generate_recommendations(user_id)
@@ -168,8 +181,8 @@ def submit_query(user_id, _session_role, query_text, active_student_id=None):
         "hallucination_warning": source == "llm",
         "taboo_filtered": taboo_filtered,
         "taboo_count": taboo_count,
+        "target_student_id": target_student_id,
         "active_student_id": target_student_id,
-        "active_student_name": get_student_username(target_student_id) if target_student_id else None,
         "debug":    _last_query_debug.copy(),  # distance scores for metadata panel
     }
 
@@ -226,40 +239,125 @@ def get_student_username(student_id):
 
 
 def parse_enrollment_action(query_text, role, active_student_id=None):
-    """Detect chat commands like 'enroll/register Nathan/him in CS310'."""
+    """Detect chat commands like 'enroll/register Nathan/him in CS310'.
+
+    Returns:
+        None              – query is not an enroll command
+        {"error": str}    – enroll intent detected but something is missing
+        {"student_id":…, "course_id":…} – ready to execute
+    """
     q = (query_text or "").lower()
-    if not any(word in q for word in ("enroll", "register", "sign up", "add him", "add her", "add them", "add me")):
+    enroll_keywords = ("enroll", "register", "sign up", "add him", "add her", "add them", "add me")
+    if not any(word in q for word in enroll_keywords):
         return None
 
-    student_id = active_student_id
     if role == "student":
-        student_id = None  # caller fills this with the logged-in user below
-    elif role != "registrar" or not student_id:
+        # student enrolls themselves — student_id filled by caller
+        student_id = None
+    elif role == "registrar":
+        student_id = find_student_reference(query_text) or active_student_id
+        if not student_id:
+            return {"error": "Please specify which student to enroll (e.g., 'enroll Liam in CS101')."}
+    else:
         return None
 
     course_id = find_course_reference(query_text)
     if not course_id:
-        return None
+        return {"error": "Please specify which course (e.g., 'enroll Liam in CS101')."}
     return {"student_id": student_id, "course_id": course_id}
+
+
+_DROP_KEYWORDS = (
+    "remove", "drop", "take out", "unenroll", "de-register",
+    "deregister", "kick out", "withdraw", "pull out",
+    "take him out", "take her out", "take them out",
+)
+
+
+def parse_drop_action(query_text, role, active_student_id=None):
+    """Detect commands like 'remove/drop/take him out of MATH101'.
+
+    Returns:
+        None              – query is not a drop command
+        {"error": str}    – drop intent detected but something is missing
+        {"student_id":…, "course_id":…} – ready to execute
+    """
+    q = (query_text or "").lower()
+    if not any(kw in q for kw in _DROP_KEYWORDS):
+        return None  # not a drop query at all
+
+    if role != "registrar":
+        return None
+
+    # Try to resolve student from the query first, then fall back to session context
+    student_id = find_student_reference(query_text) or active_student_id
+    if not student_id:
+        return {"error": "Please specify which student to drop (e.g., 'remove Liam from CS101')."}
+
+    course_id = find_course_reference(query_text)
+    if not course_id:
+        return {"error": "Please specify which course to drop them from (e.g., 'remove Liam from CS101')."}
+
+    return {"student_id": student_id, "course_id": course_id}
+
+
+def drop_from_ai(student_id, course_id):
+    db = get_db()
+    try:
+        enrollment = db.execute(
+            """SELECT id FROM enrollments
+               WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+            (student_id, course_id),
+        ).fetchone()
+        if not enrollment:
+            return "That student is not enrolled in this course.", False
+
+        db.execute(
+            "UPDATE enrollments SET status = 'cancelled' WHERE id = ?",
+            (enrollment["id"],),
+        )
+        db.execute(
+            "UPDATE courses SET enrolled_count = MAX(0, enrolled_count - 1) WHERE id = ?",
+            (course_id,),
+        )
+        db.commit()
+
+        student = db.execute(
+            "SELECT username FROM users WHERE id = ?", (student_id,)
+        ).fetchone()
+        course = db.execute(
+            "SELECT course_name FROM courses WHERE id = ?", (course_id,)
+        ).fetchone()
+        name = student["username"] if student else "Student"
+        cname = course["course_name"] if course else "that course"
+        return f"{name} has been removed from {cname}.", True
+    except Exception as e:
+        db.rollback()
+        return f"Failed to drop course: {e}", False
+    finally:
+        db.close()
 
 
 def find_course_reference(query_text):
     q = (query_text or "").lower()
+    q_nospace = re.sub(r"[\s\-_]+", "", q)  # "math 101" → "math101" for code matching
     db = get_db()
     try:
         rows = db.execute(
             """SELECT id, course_name
                FROM courses
-               WHERE status = 'active'
                ORDER BY LENGTH(course_name) DESC"""
         ).fetchall()
         for row in rows:
             course_name = row["course_name"] or ""
-            code = _course_code(course_name).lower()
+            code = _course_code(course_name).lower()          # e.g. "math101"
             title = course_name.lower()
             title_part = title.split(" - ", 1)[1] if " - " in title else title
             if (
-                (code and re.search(r"\b" + re.escape(code) + r"\b", q))
+                (code and (
+                    re.search(r"\b" + re.escape(code) + r"\b", q)
+                    or code in q_nospace
+                ))
                 or (title and title in q)
                 or (title_part and len(title_part) > 3 and title_part in q)
             ):
@@ -1873,7 +1971,6 @@ def register_ai_routes(app):
             return render_template('ai/assistant.html',
                 role='visitor', username='Guest',
                 history=[], pending_flags=[],
-                active_student_name=None,
                 access_denied=False,
             )
         user_id  = session['user_id']
@@ -1890,14 +1987,10 @@ def register_ai_routes(app):
 
         history       = get_query_history(user_id, limit=15)
         pending_flags = get_all_flags(status_filter='pending') if role == 'registrar' else []
-        active_student_name = None
-        if role == 'registrar':
-            active_student_name = get_student_username(session.get('ai_active_student_id'))
 
         return render_template('ai/assistant.html',
             role=role, username=username,
             history=history, pending_flags=pending_flags,
-            active_student_name=active_student_name,
             access_denied=False,
         )
 
@@ -1928,9 +2021,9 @@ def register_ai_routes(app):
         role    = session.get('role', 'visitor')
         active_student_id = None
         if role == 'registrar':
-            mentioned_student_id = find_student_reference(query_text)
-            if mentioned_student_id:
-                session['ai_active_student_id'] = mentioned_student_id
+            mentioned = find_student_reference(query_text)
+            if mentioned:
+                session['ai_active_student_id'] = mentioned
             active_student_id = session.get('ai_active_student_id')
         result  = submit_query(user_id, role, query_text, active_student_id=active_student_id)
         if role == 'registrar' and result.get('active_student_id'):
@@ -1949,9 +2042,9 @@ def register_ai_routes(app):
                 for r in raw_recs
             ]
         elif role == 'registrar' and session.get('ai_active_student_id') and _is_recommendation_query(query_text) and not result.get('error'):
-            raw_recs = generate_recommendations(session['ai_active_student_id'])
-            active_name = get_student_username(session['ai_active_student_id'])
-            result['active_student_name'] = active_name
+            reg_student_id = session['ai_active_student_id']
+            raw_recs = generate_recommendations(reg_student_id)
+            active_name = get_student_username(reg_student_id)
             result['recommendation_cards'] = [
                 {
                     'id':          r['course']['id'],
@@ -1959,6 +2052,7 @@ def register_ai_routes(app):
                     'time_slot':   r['course'].get('time_slot') or 'TBD',
                     'reason':      f"For {active_name}: {r['reason']}" if active_name else r['reason'],
                     'difficulty':  _infer_difficulty_str(r['course']['course_name']),
+                    'student_id':  reg_student_id,
                 }
                 for r in raw_recs
             ]
@@ -2144,11 +2238,15 @@ def register_ai_routes(app):
         from flask import jsonify
         if 'user_id' not in session:
             return jsonify({'error': 'Student or registrar access only'}), 403
-        if session.get('role') == 'student':
+        role = session.get('role')
+        if role == 'student':
             target_student_id = session['user_id']
-        elif session.get('role') == 'registrar' and session.get('ai_active_student_id'):
-            target_student_id = session['ai_active_student_id']
+        elif role == 'registrar':
+            data = request.get_json(silent=True) or {}
+            target_student_id = data.get('student_id') or session.get('ai_active_student_id')
+            if not target_student_id:
+                return jsonify({'error': 'No student specified — mention a student name in your query first'}), 400
         else:
-            return jsonify({'error': 'Student access only, or select a student first as registrar'}), 403
+            return jsonify({'error': 'Student or registrar access only'}), 403
         msg, ok = enroll_from_ai(target_student_id, course_id)
         return jsonify({'message': msg, 'ok': ok}), (200 if ok else 400)
