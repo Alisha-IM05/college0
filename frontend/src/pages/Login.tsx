@@ -1,6 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import { SignedIn, SignedOut, SignIn, useAuth } from '@clerk/clerk-react';
-
+import React, { useState } from 'react';
 import { getPageData } from '../lib/data';
 import { postForm, navigate } from '../lib/api';
 
@@ -27,20 +25,27 @@ const QUICK_LOGINS = {
 };
 
 export function Login(): React.ReactElement {
-  const data = getPageData();
+  const data = getPageData() as any;
   const [demoError, setDemoError] = useState<string | null>(data.error ?? null);
   const [submitting, setSubmitting] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
 
-  async function doDemoLogin(username: string, password: string) {
+  async function doDemoLogin(u: string, p: string) {
     setSubmitting(true);
     setDemoError(null);
-    const resp = await postForm('/login', { username, password });
+    const resp = await postForm('/login', { username: u, password: p });
     setSubmitting(false);
     if (resp.ok && resp.redirect) {
       navigate(resp.redirect);
     } else {
       setDemoError(resp.error || 'Invalid username or password.');
     }
+  }
+
+  async function handleManualLogin(e: React.FormEvent) {
+    e.preventDefault();
+    await doDemoLogin(username, password);
   }
 
   function QuickDropdown({
@@ -54,7 +59,6 @@ export function Login(): React.ReactElement {
   }) {
     const [selected, setSelected] = useState('');
 
-    // If only one user, show a direct button instead of dropdown
     if (users.length === 1) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -65,17 +69,7 @@ export function Login(): React.ReactElement {
             type="button"
             disabled={submitting}
             onClick={() => void doDemoLogin(users[0].username, users[0].password)}
-            style={{
-              padding: '8px 24px',
-              borderRadius: 8,
-              border: 'none',
-              background: color,
-              color: 'white',
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
+            style={{ padding: '8px 24px', borderRadius: 8, border: 'none', background: color, color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             {users[0].label} →
           </button>
@@ -93,17 +87,7 @@ export function Login(): React.ReactElement {
             value={selected}
             onChange={e => setSelected(e.target.value)}
             disabled={submitting}
-            style={{
-              flex: 1, minWidth: 160,
-              padding: '8px 10px',
-              borderRadius: 8,
-              border: '1px solid #e2e8f0',
-              fontSize: 13,
-              background: 'white',
-              color: selected ? '#1e293b' : '#94a3b8',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
+            style={{ flex: 1, minWidth: 160, padding: '8px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: 'white', color: selected ? '#1e293b' : '#94a3b8', outline: 'none', cursor: 'pointer' }}
           >
             <option value="">Select {label}...</option>
             {users.map(u => (
@@ -117,18 +101,7 @@ export function Login(): React.ReactElement {
               const user = users.find(u => u.username === selected);
               if (user) void doDemoLogin(user.username, user.password);
             }}
-            style={{
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: 'none',
-              background: selected ? color : '#e2e8f0',
-              color: selected ? 'white' : '#94a3b8',
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: selected ? 'pointer' : 'not-allowed',
-              transition: 'all .15s',
-              whiteSpace: 'nowrap',
-            }}
+            style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: selected ? color : '#e2e8f0', color: selected ? 'white' : '#94a3b8', fontWeight: 700, fontSize: 13, cursor: selected ? 'pointer' : 'not-allowed', transition: 'all .15s', whiteSpace: 'nowrap' }}
           >
             Go →
           </button>
@@ -145,105 +118,52 @@ export function Login(): React.ReactElement {
           <p className="subtitle">AI-Enabled College Program System</p>
         </div>
 
-        <SignedOut>
-          <div className="clerk-mount">
-            <SignIn
-              routing="hash"
-              signUpUrl="/apply"
-              forceRedirectUrl="/"
-            />
-          </div>
-          <div className="apply-links">
-            <a href="/apply">Apply for an account</a>
-            {' · '}
-            <a href="/apply/status/">Check application status</a>
-          </div>
-        </SignedOut>
+        {/* Manual login form */}
+        <form onSubmit={handleManualLogin} style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 8 }}>
+          <input
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            required
+            style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14 }}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14 }}
+          />
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{ padding: '10px', borderRadius: 8, border: 'none', background: '#2E4A7A', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}
+          >
+            {submitting ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
 
-        <SignedIn>
-          <div className="bridge-status">
-            <ClerkBridge />
-          </div>
-        </SignedIn>
+        <div className="apply-links">
+          <a href="/apply">Apply for an account</a>
+          {' · '}
+          <a href="/apply/status/">Check application status</a>
+        </div>
+
+        {demoError && (
+          <p className="error" style={{ textAlign: 'center', marginTop: 10 }}>{demoError}</p>
+        )}
 
         <div className="quick-login-strip">
           <p className="label">— Quick Login (Demo) —</p>
-          <div style={{ display: "flex", gap: 12, flexDirection: "column" }}>
+          <div style={{ display: 'flex', gap: 12, flexDirection: 'column' }}>
             <QuickDropdown label="Registrar" color="#dc2626" users={QUICK_LOGINS.registrar} />
             <QuickDropdown label="Instructor" color="#16a34a" users={QUICK_LOGINS.instructor} />
             <QuickDropdown label="Student" color="#7c3aed" users={QUICK_LOGINS.student} />
           </div>
-          {demoError && (
-            <p className="error" style={{ textAlign: 'center', marginTop: 10 }}>{demoError}</p>
-          )}
         </div>
       </div>
     </div>
-  );
-}
-
-function ClerkBridge(): React.ReactElement {
-  const { getToken, signOut } = useAuth();
-  const [error, setError] = useState<string | null>(null);
-  const [retryRedirect, setRetryRedirect] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('signed_out') === '1') {
-        try {
-          await signOut();
-        } finally {
-          if (!cancelled) window.location.replace('/');
-        }
-        return;
-      }
-      try {
-        const token = await getToken();
-        const resp = await postForm('/auth/clerk-login', {}, { bearerToken: token });
-        if (cancelled) return;
-        if (resp.ok && resp.redirect) {
-          navigate(resp.redirect);
-          return;
-        }
-        setError(resp.error || 'Could not sign you in.');
-        if (resp.redirect) setRetryRedirect(resp.redirect);
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message || 'Network error.');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [getToken, signOut]);
-
-  return (
-    <>
-      <p className="muted">
-        Signed in via Clerk
-        {' '}·{' '}
-        <a
-          href="#"
-          onClick={async (e) => {
-            e.preventDefault();
-            await signOut();
-            window.location.reload();
-          }}
-        >
-          Use a different account
-        </a>
-      </p>
-      {error ? (
-        <>
-          <div className="error">{error}</div>
-          {retryRedirect && (
-            <a className="cta" href={retryRedirect}>Continue</a>
-          )}
-        </>
-      ) : (
-        <p className="muted">Signing you in…</p>
-      )}
-    </>
   );
 }
