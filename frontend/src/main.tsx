@@ -27,6 +27,8 @@ import { Home } from './pages/Home';
 import { Profile } from './pages/Profile';
 import { AIAssistant } from './pages/AIAssistant';
 import { Suspended } from './pages/Suspended';
+import { FlaggedGPAs } from './pages/FlaggedGPAs';
+
 
 function renderPage(pageId: string): React.ReactElement {
   switch (pageId) {
@@ -78,6 +80,8 @@ function renderPage(pageId: string): React.ReactElement {
       return <AIAssistant />;
     case 'suspended':
       return <Suspended />;
+    case 'flagged_gpas':
+      return <FlaggedGPAs />;
   }
 }
 
