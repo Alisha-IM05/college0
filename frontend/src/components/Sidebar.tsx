@@ -63,6 +63,7 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
       {/* Nav */}
       <nav style={{ padding: '12px 8px', flex: 1, overflowY: 'auto' }}>
         <SidebarLink href="/dashboard" icon="🏠" label="Dashboard" active={activePage === 'dashboard'} />
+        <SidebarLink href="/ai/assistant" icon="🤖" label="AI Assistant" active={activePage === 'ai_assistant'} />
 
         {role === 'student' && <>
           <SidebarLink href="/courses/register" icon="📋" label="Registration" active={activePage === 'register'} />

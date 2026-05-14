@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review Flagged Responses - College0</title>
+<style>
+:root {
+  --bg: #f7f8fb;
+  --panel: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --blue: #223f66;
+  --green: #167a3d;
+  --green-bg: #e8f7ee;
+  --gold: #8a6400;
+  --gold-bg: #fff7df;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.topbar {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  background: rgba(247, 248, 251, .9);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 800; }
+.spacer { flex: 1; }
+.topbar a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.page {
+  width: min(1040px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 36px 0 56px;
+}
+.header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+h1 { margin: 0 0 6px; color: var(--blue); }
+.subtitle { margin: 0; color: var(--muted); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.filters a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  padding: 8px 12px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+}
+.filters a.active { border-color: var(--blue); color: var(--blue); font-weight: 800; }
+.flag-list { display: grid; gap: 16px; }
+.flag-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .06);
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.pill {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #eef2f7;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.pill.pending { background: var(--gold-bg); color: var(--gold); }
+.pill.reviewed { background: var(--green-bg); color: var(--green); }
+.section-title {
+  margin: 14px 0 6px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.text-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfcff;
+  padding: 12px;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+.reason { color: #7f1d1d; background: #fff1f2; border-color: #fecdd3; }
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.resolve {
+  border: 0;
+  border-radius: 999px;
+  background: var(--blue);
+  color: white;
+  padding: 9px 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.empty {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+  color: var(--muted);
+}
+@media (max-width: 720px) {
+  .header { align-items: flex-start; flex-direction: column; }
+  .topbar .user { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">College0 Assistant</div>
+  <div class="spacer"></div>
+  <div class="user">Welcome, {{ username }}</div>
+  <a href="/ai/assistant">Assistant</a>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/logout">Logout</a>
+</header>
+
+<main class="page">
+  <div class="header">
+    <div>
+      <h1>Review Flagged Responses</h1>
+      <p class="subtitle">Review AI responses reported by students, instructors, or staff.</p>
+    </div>
+    <nav class="filters" aria-label="Flag filters">
+      <a class="{{ 'active' if status_filter == 'pending' else '' }}" href="/ai/flags?status=pending">Pending</a>
+      <a class="{{ 'active' if status_filter == 'reviewed' else '' }}" href="/ai/flags?status=reviewed">Reviewed</a>
+      <a class="{{ 'active' if status_filter == 'all' else '' }}" href="/ai/flags?status=all">All</a>
+    </nav>
+  </div>
+
+  <section class="flag-list">
+    {% if flags %}
+      {% for flag in flags %}
+      <article class="flag-card">
+        <div class="meta">
+          <span class="pill {{ flag.status }}">{{ flag.status|title }}</span>
+          <span class="pill">Flagged by {{ flag.flagged_by_name }}</span>
+          <span class="pill">Original user {{ flag.query_owner_name }}</span>
+          <span class="pill">{{ flag.role_at_query or 'unknown role' }}</span>
+          <span class="pill">{{ flag.source }}</span>
+        </div>
+
+        <div class="section-title">Flag Reason</div>
+        <div class="text-box reason">{{ flag.reason }}</div>
+
+        <div class="section-title">Original Query</div>
+        <div class="text-box">{{ flag.query_text }}</div>
+
+        <div class="section-title">AI Response</div>
+        <div class="text-box">{{ flag.response_text or 'No response text stored.' }}</div>
+
+        {% if flag.status == 'pending' %}
+        <form class="actions" method="POST" action="/ai/flags/{{ flag.id }}/resolve">
+          <button class="resolve" type="submit">Mark Reviewed</button>
+        </form>
+        {% endif %}
+      </article>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No flagged responses match this filter.</div>
+    {% endif %}
+  </section>
+</main>
+</body>
+</html>

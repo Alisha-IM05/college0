@@ -3,6 +3,7 @@ import os
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from jinja2 import ChoiceLoader, FileSystemLoader
+from modules.ai import register_ai_routes
 
 try:
     from dotenv import load_dotenv
@@ -24,8 +25,8 @@ from modules.semester import (
     advance_period, create_course, register_student,
     admit_from_waitlist, enforce_minimums, submit_grade,
     apply_for_graduation, resolve_graduation,
-    get_current_semester, get_current_period, 
-    use_honor_roll_to_remove_warning, submit_gpa_justification, 
+    get_current_semester, get_current_period,
+    use_honor_roll_to_remove_warning, submit_gpa_justification,
     resolve_gpa_flag, get_active_semester
 )
 
@@ -84,6 +85,7 @@ _PAGE_TITLES = {
     'my_reviews':        'College0 — Reviews',
     'home':              'College0 — AI-Enabled College Management',
     'profile':           'College0 — My Profile',
+    'ai_assistant':      'College0 — AI Assistant',
 }
 
 
@@ -158,33 +160,184 @@ def enforce_password_change():
 with app.app_context():
     init_db()
 
+register_ai_routes(app)   # Subsystem 5 — mounts React/API AI routes from modules/ai.py
+
 
 # ── TEMPORARY LOGIN (until Zhuolin builds real auth) ─────────────────────────
 
 def create_test_users():
     conn = get_db()
     test_users = [
-        ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
-        ('instructor1', 'instructor1@college0.com', 'password123', 'instructor'),
-        ('zhuolin', 'zhoulinl@college0.com', '12345', 'student'),
-        ('student2',   'student2@college0.com',   'password123', 'student'),
+        ('registrar1', 'registrar1@college0.com', 'password', 'registrar'),
+        ('instructor1', 'instructor1@college0.com', 'password', 'instructor'),
+        ('instructor2', 'instructor2@college0.com', 'password', 'instructor'),
+        ('student1', 'student1@college0.com', 'password', 'student'),
+        ('student2',   'student2@college0.com',   'password', 'student'),
+        ('nathan', 'nathan@college0.com', 'password', 'student'),
+        ('maya', 'maya@college0.com', 'password', 'student'),
+        ('liam', 'liam@college0.com', 'password', 'student'),
+        ('zhuolin', 'zhoulinl@college0.com', 'password', 'student'),
     ]
     for username, email, password, role in test_users:
-        try:
-            conn.execute(
-                "INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)",
-                (username, email, password, role)
-            )
-            if role == 'student':
-                user = conn.execute(
-                    "SELECT id FROM users WHERE username = ?", (username,)
-                ).fetchone()
-                conn.execute(
-                    "INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],)
-                )
-        except:
-            pass
+        conn.execute(
+            """INSERT OR IGNORE INTO users (username, email, password, role)
+               VALUES (?, ?, ?, ?)""",
+            (username, email, password, role)
+        )
+        conn.execute(
+            "UPDATE users SET password = ?, role = ? WHERE username = ?",
+            (password, role, username)
+        )
+        if role == 'student':
+            user = conn.execute(
+                "SELECT id FROM users WHERE username = ?", (username,)
+            ).fetchone()
+            conn.execute("INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],))
 
+    conn.execute(
+        """DELETE FROM students
+           WHERE id IN (SELECT s.id FROM students s JOIN users u ON s.id = u.id WHERE u.role != 'student')"""
+    )
+
+    def user_id(username):
+        row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        return row['id'] if row else None
+
+    instructor1 = user_id('instructor1')
+    instructor2 = user_id('instructor2')
+
+    conn.execute(
+        "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (1, 'Spring 2026', 'running')"
+    )
+    conn.execute(
+        "UPDATE semesters SET current_period = 'running' WHERE id = 1"
+    )
+
+    demo_courses = [
+        ('CS101 - Intro to Computing', instructor1, 'Mon/Wed', 1, '10:00', '11:30', 30),
+        ('CS201 - Data Structures', instructor1, 'Tue/Thu', 3, '13:00', '14:30', 30),
+        ('MATH101 - Calculus I', instructor2, 'Mon/Wed', 1, '14:00', '15:30', 30),
+        ('ENG101 - English Composition', instructor2, 'Fri', 5, '09:00', '12:00', 30),
+        ('CS310 - Algorithms', instructor1, 'Mon/Wed', 1, '12:00', '13:30', 25),
+        ('CS410 - Machine Learning', instructor2, 'Tue/Thu', 3, '10:00', '11:30', 20),
+    ]
+    for name, instructor_id, slot, day, start, end, cap in demo_courses:
+        existing = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE courses
+                   SET instructor_id = ?, time_slot = ?, day_of_week = ?,
+                       start_time = ?, end_time = ?, capacity = ?, status = 'active'
+                   WHERE id = ?""",
+                (instructor_id, slot, day, start, end, cap, existing['id'])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO courses
+                   (course_name, instructor_id, time_slot, day_of_week, start_time,
+                    end_time, capacity, semester_id, enrolled_count, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')""",
+                (name, instructor_id, slot, day, start, end, cap)
+            )
+
+    def course_id(name):
+        row = conn.execute(
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1",
+            (name,)
+        ).fetchone()
+        return row['id'] if row else None
+
+    demo_students = {
+        'student1': {'semester_gpa': 3.20, 'cumulative_gpa': 3.15, 'credits_earned': 42, 'status': 'active', 'honor_roll': 0},
+        'student2': {'semester_gpa': 2.70, 'cumulative_gpa': 2.85, 'credits_earned': 36, 'status': 'active', 'honor_roll': 0},
+        'nathan': {'semester_gpa': 3.42, 'cumulative_gpa': 3.42, 'credits_earned': 48, 'status': 'active', 'honor_roll': 0},
+        'maya': {'semester_gpa': 3.90, 'cumulative_gpa': 3.88, 'credits_earned': 72, 'status': 'active', 'honor_roll': 1},
+        'liam': {'semester_gpa': 1.80, 'cumulative_gpa': 1.95, 'credits_earned': 30, 'status': 'probation', 'honor_roll': 0},
+    }
+    for username, data in demo_students.items():
+        sid = user_id(username)
+        if sid:
+            conn.execute(
+                """UPDATE students
+                   SET semester_gpa = ?, cumulative_gpa = ?, credits_earned = ?,
+                       status = ?, honor_roll = ?
+                   WHERE id = ?""",
+                (
+                    data['semester_gpa'], data['cumulative_gpa'],
+                    data['credits_earned'], data['status'], data['honor_roll'], sid
+                )
+            )
+
+    demo_enrollments = {
+        'student1': ['CS101 - Intro to Computing', 'ENG101 - English Composition'],
+        'student2': ['MATH101 - Calculus I'],
+        'nathan': ['CS101 - Intro to Computing', 'CS201 - Data Structures', 'CS410 - Machine Learning'],
+        'maya': ['CS310 - Algorithms', 'CS410 - Machine Learning'],
+        'liam': ['ENG101 - English Composition', 'MATH101 - Calculus I'],
+    }
+    for username, course_names in demo_enrollments.items():
+        sid = user_id(username)
+        for course_name in course_names:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    """SELECT id FROM enrollments
+                       WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+                    (sid, cid)
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+                        (sid, cid)
+                    )
+
+    grade_values = {'A': 4.0, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0}
+    demo_grades = {
+        'student1': [('CS101 - Intro to Computing', 'B')],
+        'student2': [('ENG101 - English Composition', 'B')],
+        'nathan': [('CS101 - Intro to Computing', 'A'), ('ENG101 - English Composition', 'B')],
+        'maya': [('CS101 - Intro to Computing', 'A'), ('CS201 - Data Structures', 'A')],
+        'liam': [('CS101 - Intro to Computing', 'D'), ('CS201 - Data Structures', 'F')],
+    }
+    for username, grades in demo_grades.items():
+        sid = user_id(username)
+        for course_name, letter in grades:
+            cid = course_id(course_name)
+            if sid and cid:
+                exists = conn.execute(
+                    "SELECT id FROM grades WHERE student_id = ? AND course_id = ?",
+                    (sid, cid)
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "UPDATE grades SET letter_grade = ?, numeric_value = ? WHERE id = ?",
+                        (letter, grade_values[letter], exists['id'])
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO grades
+                           (student_id, course_id, letter_grade, numeric_value)
+                           VALUES (?, ?, ?, ?)""",
+                        (sid, cid, letter, grade_values[letter])
+                    )
+
+    course_ids = [
+        course_id(name) for name, *_ in demo_courses
+    ]
+    for cid in course_ids:
+        if cid:
+            count = conn.execute(
+                """SELECT COUNT(*) FROM enrollments
+                   WHERE course_id = ? AND status = 'enrolled'""",
+                (cid,)
+            ).fetchone()[0]
+            conn.execute("UPDATE courses SET enrolled_count = ? WHERE id = ?", (count, cid))
+
+    for word in ['hate', 'stupid', 'idiot']:
+        conn.execute("INSERT OR IGNORE INTO taboo_words (word) VALUES (?)", (word,))
 
     conn.commit()
     conn.close()
@@ -503,7 +656,7 @@ def dashboard():
     semester = get_active_semester()
     student_data = None
     grades = []
-    grad_app = None 
+    grad_app = None
     if session['role'] == 'student':
         student_data = conn.execute(
             """SELECT u.*, s.semester_gpa, s.cumulative_gpa, s.credits_earned, s.honor_roll
@@ -534,7 +687,7 @@ def dashboard():
                         semester=dict(semester) if semester else None,
                         student_data=dict(student_data) if student_data else None,
                         grades=_rows_to_dicts(grades))
-    
+
 @app.route('/profile')
 def profile():
     if 'user_id' not in session:
@@ -545,20 +698,20 @@ def profile():
     if session['role'] == 'student':
         student = conn.execute("SELECT * FROM students WHERE id = ?", (session['user_id'],)).fetchone()
     conn.close()
-    
+
     # show tutorial only once
     show_tutorial = session.get('role') == 'student' and not session.get('tutorial_done')
     if show_tutorial:
         session['tutorial_done'] = True
-    
+
     return render_react('profile',
                         username=session['username'],
                         role=session['role'],
                         user=dict(user) if user else None,
                         student=dict(student) if student else None,
                         show_tutorial=show_tutorial)
-    
-    
+
+
 #start of Tanzina's code
 # ── COURSES / REGISTRATION ────────────────────────────────────────────────────
 
@@ -588,7 +741,7 @@ def course_registration():
     (semester['id'], session['user_id'])
     ).fetchall()
     enrolled = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
+        """SELECT c.*, u.username as instructor_name
            FROM enrollments e
            JOIN courses c ON e.course_id = c.id
            LEFT JOIN users u ON c.instructor_id = u.id
@@ -597,7 +750,7 @@ def course_registration():
         (session['user_id'], semester['id'])
     ).fetchall()
     cancelled_courses = conn.execute(
-        """SELECT c.*, u.username as instructor_name 
+        """SELECT c.*, u.username as instructor_name
            FROM enrollments e
            JOIN courses c ON e.course_id = c.id
            LEFT JOIN users u ON c.instructor_id = u.id
@@ -624,7 +777,7 @@ def course_registration():
                         cancelled_courses=_rows_to_dicts(cancelled_courses),
                         waitlisted=_rows_to_dicts(waitlisted),
                         special_registration=bool(special_registration))
-    
+
 @app.route('/instructor/courses')
 def instructor_courses():
     if 'user_id' not in session or session['role'] != 'instructor':
@@ -633,7 +786,7 @@ def instructor_courses():
     semester = get_active_semester()
     courses = conn.execute(
         """SELECT c.*, s.name as semester_name, s.current_period,
-           (SELECT COUNT(*) FROM waitlist w 
+           (SELECT COUNT(*) FROM waitlist w
             WHERE w.course_id = c.id AND w.status = 'pending') as waitlist_count
            FROM courses c JOIN semesters s ON c.semester_id = s.id
            WHERE c.instructor_id = ? AND c.semester_id = ?""",
@@ -740,7 +893,7 @@ def advance_semester():
     message = advance_period(semester_id)
     if message == 'special_registration':
         summary = enforce_minimums(semester_id)
-        message = summary  
+        message = summary
     conn = get_db()
     semester = get_active_semester()
     conn.close()
@@ -759,7 +912,7 @@ def retreat_semester():
     semester = conn.execute("SELECT * FROM semesters WHERE id = ?", (semester_id,)).fetchone()
     current = semester['current_period']
     PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
-    
+
     if current == 'setup':
         # Try to go back to previous semester's grading period
         prev_semester = conn.execute(
@@ -784,7 +937,7 @@ def retreat_semester():
         )
         conn.commit()
         message = f'Moved back to {prev_period}'
-    
+
     semester = get_active_semester()
     conn.close()
     return render_react('manage',
@@ -879,8 +1032,8 @@ def graduation_resolve_page():
         return redirect(url_for('home'))
     conn = get_db()
     applications = conn.execute(
-        """SELECT ga.*, u.username, 
-           (SELECT COUNT(*) FROM grades g 
+        """SELECT ga.*, u.username,
+           (SELECT COUNT(*) FROM grades g
             JOIN enrollments e ON g.student_id = e.student_id AND g.course_id = e.course_id
             WHERE g.student_id = ga.student_id AND g.letter_grade != 'F') as credits_earned
            FROM graduation_applications ga
@@ -928,9 +1081,9 @@ def class_detail(course_id):
     if session['role'] == 'instructor' and course['instructor_id'] != session['user_id']:
         conn.close()
         return "Access denied — this course is not assigned to you", 403
-    
+
     enrolled = conn.execute(
-        """SELECT u.id, u.username, g.letter_grade 
+        """SELECT u.id, u.username, g.letter_grade
            FROM enrollments e JOIN users u ON e.student_id = u.id
            LEFT JOIN grades g ON g.student_id = u.id AND g.course_id = ?
            WHERE e.course_id = ? AND e.status = 'enrolled'""",
@@ -959,7 +1112,7 @@ def class_detail(course_id):
 def submit_grade_route(course_id):
     if 'user_id' not in session:
         return redirect(url_for('home'))
-    
+
     student_id = int(request.form['student_id'])
     letter_grade = request.form['letter_grade']
     message = submit_grade(session['user_id'], student_id, course_id, letter_grade)
@@ -1111,7 +1264,7 @@ def view_reviews(course_id):
         return redirect(url_for('home'))
     conn = get_db()
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
- 
+
     # Check if this student was ever enrolled (for showing/hiding the form)
     was_enrolled = None
     already_reviewed = None
@@ -1124,7 +1277,7 @@ def view_reviews(course_id):
             "SELECT id FROM reviews WHERE student_id = ? AND course_id = ?",
             (session['user_id'], course_id)
         ).fetchone()
- 
+
     conn.close()
     reviews = get_course_reviews(course_id, session['role'])
     avg_rating = get_course_average_rating(course_id)

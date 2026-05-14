@@ -18,9 +18,23 @@ def init_db():
     conn = get_db()
     with open(SCHEMA, 'r') as f:
         conn.executescript(f.read())
+    _ensure_runtime_columns(conn)
     conn.commit()
     conn.close()
     print("Database tables created successfully.")
+
+
+def _ensure_runtime_columns(conn):
+    """SQLite CREATE TABLE IF NOT EXISTS does not add columns to old dev DBs."""
+    migrations = [
+        ("users", "must_change_password", "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"),
+        ("users", "clerk_user_id", "ALTER TABLE users ADD COLUMN clerk_user_id TEXT"),
+        ("applications", "clerk_user_id", "ALTER TABLE applications ADD COLUMN clerk_user_id TEXT"),
+    ]
+    for table, column, sql in migrations:
+        existing = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if column not in existing:
+            conn.execute(sql)
 
 
 def seed_data():
@@ -320,6 +334,37 @@ def seed_data():
                     (sid, course_id)
                 )
     conn.commit()
+
+    # ── DEMO STUDENT ACADEMIC RECORDS ───────────────────────────────────────────
+    demo_grade_seeds = [
+        (demo1_id, cid('BUS101 - Business Writing', 1), 'A', 4.0),
+        (demo1_id, cid('PHYS101 - Physics I', 2), 'B', 3.0),
+        (demo2_id, cid('SOC101 - Intro to Sociology', 1), 'B', 3.0),
+        (demo2_id, cid('SOC201 - Social Theory', 2), 'C', 2.0),
+    ]
+    for student_id, course_id, letter, numeric in demo_grade_seeds:
+        if student_id and course_id:
+            conn.execute(
+                """INSERT OR IGNORE INTO grades
+                   (student_id, course_id, letter_grade, numeric_value)
+                   VALUES (?, ?, ?, ?)""",
+                (student_id, course_id, letter, numeric),
+            )
+
+    conn.execute(
+        """UPDATE students
+           SET semester_gpa = 3.67, cumulative_gpa = 3.67,
+               credits_earned = 5, honor_roll = 0, status = 'active'
+           WHERE id = ?""",
+        (demo1_id,),
+    )
+    conn.execute(
+        """UPDATE students
+           SET semester_gpa = 2.50, cumulative_gpa = 2.50,
+               credits_earned = 2, honor_roll = 0, status = 'active'
+           WHERE id = ?""",
+        (demo2_id,),
+    )
 
     # ── TABOO WORDS ───────────────────────────────────────────────────────────
     for word in ['hate', 'stupid', 'idiot', 'terrible', 'awful']:
