@@ -93,7 +93,8 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
       <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,.3)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, paddingLeft: 4 }}>Quick Switch</div>
         {[
           { label: 'Registrar', username: 'registrar1', color: '#c0392b' },
-          { label: 'Instructor', username: 'prof_smith', color: '#27ae60' },
+          { label: 'Prof Smith', username: 'prof_smith', color: '#27ae60' },
+          { label: 'Prof Jones', username: 'prof_jones', color: '#16a34a' },
           { label: 'Student 1', username: 'demo_student1', color: '#2980b9' },
           { label: 'Student 2', username: 'demo_student2', color: '#8e44ad' },
           ].map(q => (
