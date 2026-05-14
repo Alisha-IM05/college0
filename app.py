@@ -188,16 +188,43 @@ def enforce_password_change():
 
 @app.route('/suspension')
 def suspension_page():
-    """Dedicated page for suspended users — shows fine, warnings, pay button."""
+    """Dedicated page for suspended users — shows fine for students, reinstatement info for instructors."""
     if 'user_id' not in session:
         return redirect(url_for('home'))
     info = get_suspension_info(session['user_id'])
+
+    # Work out reinstatement semester for instructors
+    # Rule: suspended in Semester X → reinstated in the semester AFTER next
+    # e.g. suspended Spring 2027 → cannot teach Fall 2027 → reinstated Spring 2028
+    reinstatement_semester = None
+    current_sem = get_current_semester()
+    if current_sem and session.get('role') == 'suspended':
+        # Check if this user is an instructor by checking students table
+        from database.db import get_connection as _gc
+        conn = _gc()
+        is_student = conn.execute(
+            "SELECT id FROM students WHERE id = ?", (session['user_id'],)
+        ).fetchone()
+        conn.close()
+        if not is_student:
+            # It's an instructor — calculate reinstatement semester
+            name = current_sem['name']  # e.g. "Spring 2027"
+            parts = name.split(' ')
+            season = parts[0]
+            year = int(parts[1])
+            # Skip one full semester
+            if season == 'Spring':
+                reinstatement_semester = f'Fall {year + 1}'
+            else:  # Fall
+                reinstatement_semester = f'Spring {year + 1}'
+
     return render_react('suspended',
                         username=session.get('username', ''),
                         role='suspended',
                         warning_count=info['warning_count'],
                         warnings=info['warnings'],
-                        fine=info['fine'])
+                        fine=info['fine'],
+                        reinstatement_semester=reinstatement_semester)
 
 
 @app.route('/suspension/pay', methods=['POST'])
