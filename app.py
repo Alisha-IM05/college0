@@ -168,7 +168,7 @@ register_ai_routes(app)   # Subsystem 5 — mounts React/API AI routes from modu
 def create_test_users():
     conn = get_db()
     test_users = [
-        ('registrar1', 'registrar1@college0.com', 'password', 'registrar'),
+        ('registrar1', 'registrar1@college0.com', 'password123', 'registrar'),
         ('instructor1', 'instructor1@college0.com', 'password', 'instructor'),
         ('instructor2', 'instructor2@college0.com', 'password', 'instructor'),
         ('student1', 'student1@college0.com', 'password', 'student'),
