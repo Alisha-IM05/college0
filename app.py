@@ -78,12 +78,9 @@ _PAGE_TITLES = {
     'my_reviews':        'College0 — Reviews',
     'home':              'College0 — AI-Enabled College Management',
     'profile':           'College0 — My Profile',
-<<<<<<< HEAD
     'ai_assistant':      'College0 — AI Assistant',
     'suspended':         'College0 — Account Suspended',
-=======
     'account_blocked':   'College0 — Account inactive',
->>>>>>> origin/auth
 }
 
 
@@ -123,13 +120,8 @@ def _rows_to_dicts(rows):
 # Routes that a user with must_change_password=1 is still allowed to hit.
 _ALLOWED_DURING_PW_CHANGE = {
     'change_password_page', 'change_password_submit',
-<<<<<<< HEAD
     'logout', 'static', 'apply_status', 'apply_page', 'apply_submit',
-    'suspension_page', 'suspension_pay',
-=======
-    'logout', 'static', 'apply_status', 'apply_status_json', 'apply_page', 'apply_submit',
-    'account_blocked_page',
->>>>>>> origin/auth
+    'suspension_page', 'suspension_pay','account_blocked_page',
 }
 
 
@@ -184,12 +176,7 @@ def enforce_password_change():
     if row['status'] != 'active':
         reason = row['status']
         session.clear()
-<<<<<<< HEAD
-        return redirect(url_for('home'))
-
-=======
         return redirect(url_for('account_blocked_page', reason=reason))
->>>>>>> origin/auth
     if row['must_change_password']:
         session['must_change_password'] = True
         return redirect(url_for('change_password_page'))
@@ -197,7 +184,6 @@ def enforce_password_change():
     return None
 
 
-<<<<<<< HEAD
 # ── SUSPENSION ROUTES ────────────────────────────────────────────────────────
 
 @app.route('/suspension')
@@ -224,24 +210,6 @@ def suspension_pay():
         return jsonify({'ok': ok, 'message': message})
     return redirect(url_for('suspension_page'))
 
-=======
-@app.before_request
-def restrict_applicant_portal():
-    """Provisional accounts (applicant_only) may not use the full portal until approved."""
-    if 'user_id' not in session or not request.endpoint:
-        return None
-    if request.endpoint in _ALLOWED_FOR_APPLICANT_ONLY:
-        return None
-    conn = get_db()
-    row = conn.execute(
-        "SELECT IFNULL(applicant_only, 0) AS applicant_only FROM users WHERE id = ?",
-        (session['user_id'],),
-    ).fetchone()
-    conn.close()
-    if not row or row['applicant_only'] != 1:
-        return None
-    return redirect(url_for('apply_status'))
->>>>>>> origin/auth
 
 
 # initialize the database when the app starts
@@ -476,8 +444,6 @@ def login():
 
     if not user:
         return _login_error("Invalid username or password.")
-<<<<<<< HEAD
-=======
     if user['status'] == 'suspended':
         if wants_json():
             return jsonify({
@@ -485,7 +451,6 @@ def login():
                 'redirect': url_for('account_blocked_page', reason='suspended'),
             }), 200
         return redirect(url_for('account_blocked_page', reason='suspended'))
->>>>>>> origin/auth
     if user['status'] == 'terminated':
         if wants_json():
             return jsonify({
@@ -1245,8 +1210,6 @@ def class_detail(course_id):
     if session['role'] == 'instructor' and course['instructor_id'] != session['user_id']:
         conn.close()
         return "Access denied — this course is not assigned to you", 403
-<<<<<<< HEAD
-=======
     if session['role'] == 'student':
         enr = conn.execute(
             """SELECT 1 FROM enrollments
@@ -1256,7 +1219,6 @@ def class_detail(course_id):
         if not enr:
             conn.close()
             return "Access denied — you are not enrolled in this course", 403
->>>>>>> origin/auth
 
     enrolled = conn.execute(
         """SELECT u.id, u.username, g.letter_grade
