@@ -22,18 +22,20 @@ cd college0
 pip install -r requirements.txt
 ```
 
-The auth-related pages (login, apply, apply/status, change-password, registrar
-applications + users, dashboard) are a Vite-built React app served as a static
-bundle by Flask. Build it once before running the server:
+Most interactive pages (login, dashboard, courses, conduct, semester tools,
+applications, profile, AI assistant entry, and more) are a **Vite + React** app
+mounted from `templates/_shell.html`, which loads the bundle under
+`static/dist/`. Build it before running the server:
 ```bash
 cd frontend
 npm install
 npm run build      # writes static/dist/assets/{main.js,main.css}
 cd ..
 ```
-Re-run `npm run build` whenever a file under `frontend/src/` changes. Teammates'
-pages (`courses/`, `conduct/`, `semester/`, `ai/`) are still rendered server-side
-with Jinja and require no frontend build.
+Re-run `npm run build` whenever a file under `frontend/src/` changes. A few
+**legacy Jinja** pages under `templates/` remain for some flows (for example
+`semester/flagged_gpas.html` and selected AI admin templates in `templates/ai/`);
+those do not require the frontend build.
 
 > **Auth deep dive:** see [AUTH.md](AUTH.md) for the full architecture,
 > use-case map (UC-07 through UC-13), data-flow diagrams, API contract,
@@ -81,41 +83,65 @@ http://127.0.0.1:5000
 
 ```
 college0/
-├── app.py                  # Main Flask app — routes only. Only Alisha merges here.
-├── config.py               # Database path and secret key settings
+├── app.py                  # Main Flask app — routes, React shell wiring, JSON APIs
+├── config.py               # Database path, secret key, mail/Clerk-related settings
+├── requirements.txt        # Python dependencies
 ├── README.md               # This file
+├── AUTH.md                 # Clerk + session bridge (visitor apply / status)
+├── .env.example            # Example environment variables (copy to `.env`)
+├── seed_chroma.py          # Optional Chroma / vector store seeding for AI features
+├── test_semester.py        # Standalone semester DB / logic smoke script
 │
-├── modules/                # Backend logic — one file per team member
-│   ├── conduct.py          # Alisha — reviews, warnings, complaints, taboo filter
-│   ├── semester.py         # Tanzina — courses, registration, GPA, graduation
-│   ├── auth.py             # Zhuolin — login, applications, user accounts
-│   ├── frontend.py         # Abdullah — page routing and UI navigation
-│   └── ai_features.py      # Almasur — AI queries, recommendations, content filter
+├── almasur/                # Experimental AI sandbox code
+│   ├── __init__.py
+│   └── sandbox.py
 │
-├── templates/              # HTML pages — Abdullah leads, each member owns their subfolder
-│   ├── base.html           # Shared layout and navbar used by all pages
-│   ├── login.html
-│   ├── dashboard.html
-│   ├── profile.html
-│   ├── courses/
-│   │   ├── register.html
-│   │   └── class_detail.html
-│   ├── conduct/
-│   │   ├── reviews.html
-│   │   ├── warnings.html
-│   │   └── complaints.html
-│   └── ai/
-│       ├── query.html
-│       └── recommendations.html
+├── modules/                # Backend logic — one primary file per subsystem
+│   ├── __init__.py
+│   ├── conduct.py          # Reviews, warnings, complaints, taboo filter, fines
+│   ├── semester.py         # Courses, registration, GPA, graduation, semester periods
+│   ├── auth.py             # Sessions, applications, passwords, user lifecycle
+│   ├── frontend.py         # Shared UI helpers / navigation (Flask side)
+│   ├── ai_features.py      # AI routes, recommendations, flags, assistant wiring
+│   ├── ai.py               # Additional AI route registration
+│   └── mail.py             # Optional outbound email helpers
+│
+├── frontend/               # Vite + TypeScript React SPA (built into static/dist/)
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   └── src/
+│       ├── main.tsx        # App entry — mounts page from Flask `page` prop
+│       ├── components/     # Banner, Navbar, Pill, Sidebar
+│       ├── pages/          # One component per shell page (Login, Dashboard, …)
+│       ├── lib/            # api.ts (fetch + JSON), data.ts
+│       └── styles/
+│           └── global.css
+│
+├── templates/              # Jinja: React shell, legacy pages, AI HTML fallbacks
+│   ├── base.html           # Classic full-page layout (still used where applicable)
+│   ├── _shell.html         # Minimal shell — loads React bundle + inline `__data`
+│   ├── courses/            # Legacy HTML (e.g. register, class_detail, create, instructor_courses)
+│   ├── conduct/            # Legacy HTML (reviews, warnings, complaints, taboo)
+│   ├── semester/           # Legacy HTML (manage, graduation, flagged_gpas, …)
+│   └── ai/                 # assistant, query, recommendations, flag(s), …
 │
 ├── database/
-│   ├── schema.sql          # All table definitions in one place
-│   └── db.py               # Shared get_db() function — everyone imports from here
+│   ├── schema.sql          # Table definitions
+│   └── db.py               # init_db(), get_db() — single shared DB access
 │
-└── static/
-    ├── style.css           # Global styles
-    └── script.js           # Global scripts
+├── static/
+│   ├── style.css           # Global CSS for classic Jinja pages
+│   ├── script.js           # Global JS for classic Jinja pages
+│   └── dist/               # Created by `npm run build` in frontend/
+│       └── assets/         # main.js, main.css (Vite output)
+│
+└── tests/
+    └── test_auth_features.py
 ```
+
+`database/college0.db` is created when you run `python database/db.py` (see Step 3).  
+`frontend/node_modules/` is created by `npm install` and is not shown above.
 
 ---
 
@@ -133,6 +159,8 @@ issue_warning(instructor_id, "Course cancelled due to low enrollment")
 
 `app.py` connects all the modules together and starts the server.
 `database/db.py` is the single shared database connection everyone uses.
+The React UI in `frontend/` is compiled into `static/dist/` and mounted by
+`templates/_shell.html` using JSON data passed from each route.
 
 ---
 
