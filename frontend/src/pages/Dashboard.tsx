@@ -93,12 +93,14 @@ export function Dashboard(): React.ReactElement {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '1rem', marginTop: '1rem' }}>
         <QuickCard href="/complaints" icon="📢" title="Complaints" desc="File or manage complaints." />
         {role === 'registrar' && <>
+          <QuickCard href="/flagged-gpas" icon="🚩" title="Flagged GPAs" desc="Review instructors with unusual class GPAs." />
           <QuickCard href="/taboo" icon="🚫" title="Taboo Words" desc="Manage banned words." />
           <QuickCard href="/semester" icon="📅" title="Semester" desc="Advance the semester period." />
           <QuickCard href="/courses/create" icon="➕" title="Courses" desc="Add or manage courses." />
           <QuickCard href="/graduation/resolve" icon="🎓" title="Graduation" desc="Review graduation requests." />
           <QuickCard href="/registrar/applications" icon="📝" title="Applications" desc="Approve pending applications." />
           <QuickCard href="/registrar/users" icon="👥" title="Users" desc="Manage user accounts." />
+          
         </>}
         {role === 'student' && <>
           <QuickCard href="/courses/register" icon="📚" title="Registration" desc="Browse and register for courses." />

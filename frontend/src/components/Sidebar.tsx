@@ -87,6 +87,8 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
           <SidebarLink href="/registrar/users" icon="👥" label="Users" active={activePage === 'registrar_users'} />
           <SidebarLink href="/complaints" icon="📢" label="Complaints" active={activePage === 'complaints'} />
           <SidebarLink href="/taboo" icon="🚫" label="Taboo Words" active={activePage === 'taboo'} />
+          <SidebarLink href="/flagged-gpas" icon="🚩" label="Flagged GPAs" active={activePage === 'flagged_gpas'} />
+          
         </>}
       </nav>
       {/* Quick login buttons */}
