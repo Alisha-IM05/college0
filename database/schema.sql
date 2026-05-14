@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'terminated')),
     must_change_password INTEGER NOT NULL DEFAULT 0,   -- 1 = force password change on next login (UC-11)
     clerk_user_id TEXT UNIQUE,          -- Clerk identity; copied from applications.clerk_user_id on approve
+    applicant_only INTEGER NOT NULL DEFAULT 0,  -- 1 until registrar approves; portal limited to status/password
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS applications (
     email TEXT NOT NULL,
     role_applied TEXT NOT NULL CHECK(role_applied IN ('student', 'instructor')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
-    clerk_user_id TEXT,                 -- links the Clerk identity that submitted this application (UC-07/08)
+    clerk_user_id TEXT,                 -- legacy; optional third-party identity (unused when NULL)
+    view_token TEXT UNIQUE,             -- secret token for /apply/status?token=… (no Clerk)
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP
 );

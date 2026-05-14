@@ -30,30 +30,22 @@ from modules.semester import (
 )
 
 from modules.auth import (
-    submit_application, get_applications_for_clerk_user,
+    submit_application,
+    get_applications_for_view_token,
+    get_applications_for_user_id,
     list_pending_applications, list_all_applications,
     approve_application, reject_application,
     change_password,
     suspend_user, terminate_user, reactivate_user, list_manageable_users,
-    require_role, verify_clerk_session, establish_clerk_session,
+    require_role,
 )
-
-
+from modules.mail import is_mail_configured
 app = Flask(__name__)
 app.jinja_loader = ChoiceLoader([
     FileSystemLoader('templates'),
 ])
 
 app.secret_key = 'college0secretkey'
-
-
-@app.context_processor
-def inject_clerk_config():
-    """Make the Clerk publishable key available to every template so the
-    visitor-facing pages can boot Clerk JS without a backend round-trip."""
-    return {
-        "CLERK_PUBLISHABLE_KEY": os.environ.get("CLERK_PUBLISHABLE_KEY", ""),
-    }
 
 
 # ── React shell helper ───────────────────────────────────────────────────────
@@ -84,6 +76,7 @@ _PAGE_TITLES = {
     'my_reviews':        'College0 — Reviews',
     'home':              'College0 — AI-Enabled College Management',
     'profile':           'College0 — My Profile',
+    'account_blocked':   'College0 — Account inactive',
 }
 
 
@@ -99,7 +92,6 @@ def _json_default(obj):
 
 
 def render_react(page, **data):
-    data.setdefault('clerk_publishable_key', os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
     return render_template(
         '_shell.html',
         page=page,
@@ -124,8 +116,18 @@ def _rows_to_dicts(rows):
 # Routes that a user with must_change_password=1 is still allowed to hit.
 _ALLOWED_DURING_PW_CHANGE = {
     'change_password_page', 'change_password_submit',
-    'logout', 'static', 'apply_status', 'apply_page', 'apply_submit',
+    'logout', 'static', 'apply_status', 'apply_status_json', 'apply_page', 'apply_submit',
+    'account_blocked_page',
 }
+
+
+# Logged-in applicants (pending registrar approval) may only use these routes.
+_ALLOWED_FOR_APPLICANT_ONLY = frozenset({
+    'change_password_page', 'change_password_submit',
+    'logout', 'static', 'apply_status', 'apply_status_json',
+    'apply_page', 'apply_submit',
+    'account_blocked_page', 'login_page', 'login',
+})
 
 
 @app.before_request
@@ -147,12 +149,32 @@ def enforce_password_change():
         session.clear()
         return redirect(url_for('home'))
     if row['status'] != 'active':
+        reason = row['status']
         session.clear()
-        return redirect(url_for('home'))
+        return redirect(url_for('account_blocked_page', reason=reason))
     if row['must_change_password']:
         session['must_change_password'] = True
         return redirect(url_for('change_password_page'))
     return None
+
+
+@app.before_request
+def restrict_applicant_portal():
+    """Provisional accounts (applicant_only) may not use the full portal until approved."""
+    if 'user_id' not in session or not request.endpoint:
+        return None
+    if request.endpoint in _ALLOWED_FOR_APPLICANT_ONLY:
+        return None
+    conn = get_db()
+    row = conn.execute(
+        "SELECT IFNULL(applicant_only, 0) AS applicant_only FROM users WHERE id = ?",
+        (session['user_id'],),
+    ).fetchone()
+    conn.close()
+    if not row or row['applicant_only'] != 1:
+        return None
+    return redirect(url_for('apply_status'))
+
 
 # initialize the database when the app starts
 with app.app_context():
@@ -199,8 +221,12 @@ def home():
     conn = get_db()
     semester = get_active_semester()
     stats = {
-        'student_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='student'").fetchone()[0],
-        'instructor_count': conn.execute("SELECT COUNT(*) FROM users WHERE role='instructor'").fetchone()[0],
+        'student_count': conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='student' AND IFNULL(applicant_only,0)=0"
+        ).fetchone()[0],
+        'instructor_count': conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='instructor' AND IFNULL(applicant_only,0)=0"
+        ).fetchone()[0],
         'course_count': conn.execute("SELECT COUNT(*) FROM courses WHERE status='active'").fetchone()[0],
     }
     conn.close()
@@ -210,8 +236,7 @@ def home():
 
 @app.route('/login', methods=['GET'])
 def login_page():
-    return render_react('login',
-                        clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
+    return render_react('login')
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -233,9 +258,19 @@ def login():
     if not user:
         return _login_error("Invalid username or password.")
     if user['status'] == 'suspended':
-        return _login_error("Your account is suspended. Please contact the registrar.")
+        if wants_json():
+            return jsonify({
+                'ok': False,
+                'redirect': url_for('account_blocked_page', reason='suspended'),
+            }), 200
+        return redirect(url_for('account_blocked_page', reason='suspended'))
     if user['status'] == 'terminated':
-        return _login_error("Your account has been terminated. Please contact the registrar.")
+        if wants_json():
+            return jsonify({
+                'ok': False,
+                'redirect': url_for('account_blocked_page', reason='terminated'),
+            }), 200
+        return redirect(url_for('account_blocked_page', reason='terminated'))
 
     session['user_id']  = user['id']
     session['username'] = user['username']
@@ -246,53 +281,33 @@ def login():
         target = url_for('change_password_page')
     else:
         session.pop('must_change_password', None)
-        target = url_for('dashboard')
+        applicant_only = int(dict(user).get('applicant_only') or 0)
+        if applicant_only == 1:
+            target = url_for('apply_status')
+        else:
+            target = url_for('dashboard')
 
     if wants_json():
         return jsonify({'ok': True, 'redirect': target})
     return redirect(target)
 
-@app.route('/auth/clerk-login', methods=['POST'])
-def clerk_login():
-    """Bridge a verified Clerk session into the Flask session. The React
-    login page calls this after the user signs in with the Clerk <SignIn>
-    widget, so the same identity used on /apply can open a normal app
-    session. UC-10/UC-11 still apply: if the user row has
-    must_change_password=1, we redirect to /change-password just like the
-    username/password login does."""
-    result = establish_clerk_session(request)
-    if not result.get('ok'):
-        payload = {'ok': False, 'error': result.get('error', 'Sign-in failed.')}
-        if result.get('redirect'):
-            payload['redirect'] = result['redirect']
-        return jsonify(payload), 200
-
-    user = result['user']
-    session['user_id']  = user['id']
-    session['username'] = user['username']
-    session['role']     = user['role']
-    if result['must_change_password']:
-        session['must_change_password'] = True
-    else:
-        session.pop('must_change_password', None)
-
-    return jsonify({'ok': True, 'redirect': result['redirect']})
-
 
 @app.route('/logout')
 def logout():
-    """Clear the Flask session and bounce back to /. The `?signed_out=1`
-    flag tells the React login page to also sign out of Clerk on arrival —
-    otherwise the lingering Clerk JWT would let the page's ClerkBridge
-    re-establish the Flask session immediately and the user would land
-    right back on /dashboard."""
+    """Clear the Flask session and bounce back to /."""
     session.clear()
-    return redirect(url_for('home') + '?signed_out=1')
+    return redirect(url_for('home'))
 
 
 # ── APPLICATIONS (UC-07 / UC-08 / UC-11) ─────────────────────────────────────
-# Visitors authenticate with Clerk (JS) to submit an application and check
-# its status. The Clerk session is verified server-side via verify_clerk_session.
+
+
+@app.route('/account-blocked', methods=['GET'])
+def account_blocked_page():
+    reason = request.args.get('reason', '')
+    if reason not in ('suspended', 'terminated'):
+        reason = ''
+    return render_react('account_blocked', reason=reason)
 
 @app.route('/apply', methods=['GET'])
 def apply_page():
@@ -301,20 +316,13 @@ def apply_page():
 
 @app.route('/apply', methods=['POST'])
 def apply_submit():
-    clerk_user_id = verify_clerk_session(request)
-    if not clerk_user_id:
-        msg = "You must sign in with Clerk before submitting an application."
-        if wants_json():
-            return jsonify({'ok': False, 'error': msg}), 200
-        return render_react('apply', error=msg)
-
     first_name = request.form.get('first_name', '')
     last_name = request.form.get('last_name', '')
     email = request.form.get('email', '')
     role_applied = request.form.get('role_applied', '')
 
-    ok, message = submit_application(
-        first_name, last_name, email, role_applied, clerk_user_id
+    ok, message, view_token = submit_application(
+        first_name, last_name, email, role_applied
     )
     if not ok:
         if wants_json():
@@ -322,34 +330,49 @@ def apply_submit():
         return render_react('apply', error=message,
                             first_name=first_name, last_name=last_name,
                             email=email, role_applied=role_applied)
+    status_url = url_for('apply_status', token=view_token)
     if wants_json():
-        return jsonify({'ok': True, 'redirect': url_for('apply_status')})
-    return redirect(url_for('apply_status'))
+        return jsonify({'ok': True, 'redirect': status_url})
+    return redirect(status_url)
 
 
 @app.route('/apply/status')
 def apply_status():
-    clerk_user_id = verify_clerk_session(request)
-    applications = _rows_to_dicts(
-        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
-    )
+    token = (request.args.get('token') or '').strip()
+    logged_in = 'user_id' in session
+    if token:
+        rows = get_applications_for_view_token(token)
+    elif logged_in:
+        rows = get_applications_for_user_id(session['user_id'])
+    else:
+        rows = []
+    applications = _rows_to_dicts(rows)
+    missing_token = not token and not logged_in
     return render_react('apply_status',
                         applications=applications,
-                        signed_in=bool(clerk_user_id))
+                        token=token,
+                        missing_token=missing_token,
+                        logged_in=logged_in)
 
 
 @app.route('/apply/status.json')
 def apply_status_json():
-    """JSON variant used by the React ApplyStatus page when the initial HTML
-    response wasn't able to verify the Clerk session server-side (e.g. the
-    `__session` cookie wasn't sent on the initial GET)."""
-    clerk_user_id = verify_clerk_session(request)
-    applications = _rows_to_dicts(
-        get_applications_for_clerk_user(clerk_user_id) if clerk_user_id else []
-    )
+    """JSON for ApplyStatus: optional ?token=, or session when logged in."""
+    token = (request.args.get('token') or '').strip()
+    logged_in = 'user_id' in session
+    if token:
+        rows = get_applications_for_view_token(token)
+    elif logged_in:
+        rows = get_applications_for_user_id(session['user_id'])
+    else:
+        rows = []
+    applications = _rows_to_dicts(rows)
+    missing_token = not token and not logged_in
     return jsonify({
-        'signed_in': bool(clerk_user_id),
         'applications': applications,
+        'token': token,
+        'missing_token': missing_token,
+        'logged_in': logged_in,
     })
 
 
@@ -372,6 +395,7 @@ def registrar_applications():
     return render_react('registrar_applications',
                         role=session['role'],
                         username=session['username'],
+                        mail_configured=is_mail_configured(),
                         **_applications_payload(issued))
 
 
@@ -383,9 +407,9 @@ def registrar_approve_application(application_id):
         issued = {
             'user_id': result['user_id'],
             'username': result['username'],
-            'temp_password': result['temp_password'],
             'role': result['role'],
             'email': result['email'],
+            'account_activated': True,
         }
     else:
         issued = {'error': result.get('message', 'Approval failed.')}
@@ -488,9 +512,17 @@ def change_password_submit():
         return _pw_error(message)
 
     session.pop('must_change_password', None)
+    conn = get_db()
+    ao = conn.execute(
+        "SELECT IFNULL(applicant_only, 0) AS applicant_only FROM users WHERE id = ?",
+        (session['user_id'],),
+    ).fetchone()
+    conn.close()
+    applicant_only = int(ao['applicant_only'] if ao else 0)
+    next_url = url_for('apply_status') if applicant_only == 1 else url_for('dashboard')
     if wants_json():
-        return jsonify({'ok': True, 'redirect': url_for('dashboard')})
-    return redirect(url_for('dashboard'))
+        return jsonify({'ok': True, 'redirect': next_url})
+    return redirect(next_url)
 
 
 # ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -928,7 +960,16 @@ def class_detail(course_id):
     if session['role'] == 'instructor' and course['instructor_id'] != session['user_id']:
         conn.close()
         return "Access denied — this course is not assigned to you", 403
-    
+    if session['role'] == 'student':
+        enr = conn.execute(
+            """SELECT 1 FROM enrollments
+               WHERE student_id = ? AND course_id = ? AND status = 'enrolled'""",
+            (session['user_id'], course_id),
+        ).fetchone()
+        if not enr:
+            conn.close()
+            return "Access denied — you are not enrolled in this course", 403
+
     enrolled = conn.execute(
         """SELECT u.id, u.username, g.letter_grade 
            FROM enrollments e JOIN users u ON e.student_id = u.id

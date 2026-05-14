@@ -1,8 +1,11 @@
 import sqlite3
 import os
 
-DATABASE = os.path.join(os.path.dirname(__file__), 'college0.db')
-SCHEMA   = os.path.join(os.path.dirname(__file__), 'schema.sql')
+DATABASE = os.environ.get(
+    "COLLEGE0_DATABASE",
+    os.path.join(os.path.dirname(__file__), "college0.db"),
+)
+SCHEMA = os.path.join(os.path.dirname(__file__), "schema.sql")
 
 
 def get_db():
@@ -20,7 +23,30 @@ def init_db():
         conn.executescript(f.read())
     conn.commit()
     conn.close()
+    ensure_schema_migrations()
     print("Database tables created successfully.")
+
+
+def ensure_schema_migrations():
+    """SQLite CREATE TABLE IF NOT EXISTS does not add new columns; patch older DBs."""
+    conn = get_db()
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
+        if "view_token" not in cols:
+            conn.execute("ALTER TABLE applications ADD COLUMN view_token TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_applications_view_token "
+                "ON applications(view_token) WHERE view_token IS NOT NULL"
+            )
+            conn.commit()
+        user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "applicant_only" not in user_cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN applicant_only INTEGER NOT NULL DEFAULT 0"
+            )
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def seed_data():
