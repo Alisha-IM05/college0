@@ -1162,12 +1162,10 @@ def graduation_resolve_page():
         return redirect(url_for('home'))
     conn = get_db()
     applications = conn.execute(
-        """SELECT ga.*, u.username,
-           (SELECT COUNT(*) FROM grades g
-            JOIN enrollments e ON g.student_id = e.student_id AND g.course_id = e.course_id
-            WHERE g.student_id = ga.student_id AND g.letter_grade != 'F') as credits_earned
+        """SELECT ga.*, u.username, s.credits_earned
            FROM graduation_applications ga
            JOIN users u ON ga.student_id = u.id
+           JOIN students s ON ga.student_id = s.id
            WHERE ga.status = 'pending'"""
     ).fetchall()
     conn.close()

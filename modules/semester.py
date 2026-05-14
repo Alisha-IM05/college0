@@ -995,17 +995,11 @@ def resolve_graduation(application_id, approved):
         if approved:
             # Verify student has 8 passed, non-cancelled courses
             completed = conn.execute(
-                """SELECT COUNT(*) as count FROM grades g
-                   JOIN enrollments e ON g.student_id = e.student_id 
-                       AND g.course_id = e.course_id
-                   WHERE g.student_id = ?
-                   AND g.letter_grade != 'F'
-                   AND e.status = 'enrolled'""",
+                "SELECT credits_earned FROM students WHERE id = ?",
                 (application['student_id'],)
-            ).fetchone()['count']
+            ).fetchone()['credits_earned']
             if completed < 8:
                 return f'Cannot approve — student has only completed {completed} of 8 required courses'
-
             conn.execute(
                 """UPDATE graduation_applications
                    SET status = 'approved',
