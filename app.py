@@ -1057,14 +1057,13 @@ def reject_waitlist_route(course_id):
         "DELETE FROM waitlist WHERE student_id = ? AND course_id = ?",
         (student_id, course_id)
     )
-    # Issue notification via warning
+    # Issue notification via warning (not a conduct violation — use _insert_warning_only)
     course = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
-    conn.execute(
-        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
-        (student_id, f'Your waitlist request for {course["course_name"]} was rejected by the instructor')
-    )
+    course_name = course['course_name'] if course else 'the course'
     conn.commit()
     conn.close()
+    from modules.conduct import _insert_warning_only
+    _insert_warning_only(student_id, f'Your waitlist request for {course_name} was rejected by the instructor')
     return redirect(url_for('class_detail', course_id=course_id))
 
 @app.route('/warnings/remove/<int:warning_id>', methods=['POST'])
@@ -1256,11 +1255,18 @@ def view_warnings():
         return redirect(url_for('home'))
     warnings = get_user_warnings(session['user_id'])
     count = get_warning_count(session['user_id'])
+    honor_roll = 0
+    if session.get('role') == 'student':
+        conn = get_db()
+        row = conn.execute("SELECT honor_roll FROM students WHERE id = ?", (session['user_id'],)).fetchone()
+        conn.close()
+        honor_roll = row['honor_roll'] if row else 0
     return render_react('warnings',
                         username=session['username'],
                         role=session['role'],
                         warnings=_rows_to_dicts(warnings),
-                        count=count)
+                        count=count,
+                        honor_roll=honor_roll)
 
 
 # ── COMPLAINTS ────────────────────────────────────────────────────────────────

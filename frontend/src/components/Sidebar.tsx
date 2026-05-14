@@ -81,6 +81,7 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
         {role === 'registrar' && <>
           <SidebarLink href="/semester" icon="📅" label="Semester" active={activePage === 'manage'} />
           <SidebarLink href="/courses/create" icon="➕" label="Courses" active={activePage === 'create'} />
+          <SidebarLink href="/reviews" icon="⭐" label="All Reviews" active={activePage === 'reviews'} />
           <SidebarLink href="/graduation/resolve" icon="🎓" label="Graduation" active={activePage === 'graduation'} />
           <SidebarLink href="/registrar/applications" icon="📝" label="Applications" active={activePage === 'registrar_applications'} />
           <SidebarLink href="/registrar/users" icon="👥" label="Users" active={activePage === 'registrar_users'} />

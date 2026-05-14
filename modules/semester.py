@@ -1008,18 +1008,13 @@ def resolve_graduation(application_id, approved):
                    WHERE id = ?""",
                 (application_id,)
             )
-            conn.execute(
-                """INSERT INTO warnings (user_id, reason)
-                   VALUES (?, ?)""",
-                (
-                    application['student_id'],
-                    'Reckless graduation application — required courses not covered'
-                )
-            )
+            student_id_rej = application['student_id']
             conn.commit()
+            conn.close()
+            issue_warning(student_id_rej, 'Reckless graduation application — required courses not covered.')
             return 'Application rejected. Warning issued to student'
     finally:
-        conn.close()
+        pass  # conn already closed above
         
 def use_honor_roll_to_remove_warning(student_id, warning_id):
     conn = get_db()
@@ -1109,12 +1104,11 @@ def resolve_gpa_flag(registrar_id, flag_id, decision):
                    WHERE id = ?""",
                 (flag_id,)
             )
-            conn.execute(
-                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
-                (flag['instructor_id'],
-                 f'Inadequate justification for flagged class GPA of {flag["class_gpa"]:.2f}')
-            )
+            instructor_id_warn = flag['instructor_id']
+            class_gpa_val = flag['class_gpa']
             conn.commit()
+            conn.close()
+            issue_warning(instructor_id_warn, f'Inadequate justification for flagged class GPA of {class_gpa_val:.2f}')
             return 'Warning issued to instructor'
         elif decision == 'terminate':
             conn.execute(

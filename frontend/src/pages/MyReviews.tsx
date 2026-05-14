@@ -27,7 +27,7 @@ export function MyReviews(): React.ReactElement {
                   <td>{c.semester_name}</td>
                   <td>{c.time_slot || '—'}</td>
                   {role === 'student' && <td><span className={`pill ${c.review_id ? 'p-approved' : 'p-pending'}`}>{c.review_id ? '✓ Reviewed' : 'Not reviewed'}</span></td>}
-                  {role !== 'student' && <><td>{c.avg_rating ? Number(c.avg_rating).toFixed(1) + ' ⭐' : '—'}</td><td>{c.review_count || 0}</td></>}
+                  {role !== 'student' && <><td>{c.avg_rating ? Number(c.avg_rating).toFixed(1) + ' ⭐' : '—'}</td><td>{c.review_count || 0}{role === 'registrar' && c.hidden_count > 0 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, background: '#dc2626', color: 'white', padding: '2px 6px', borderRadius: 20 }}>{c.hidden_count} hidden</span>}</td></>}
                   <td><a className="btn btn-sm" href={`/reviews/${c.id}`}>{role === 'student' ? (c.review_id ? 'View' : 'Write Review') : 'View'}</a></td>
                 </tr>
               ))}

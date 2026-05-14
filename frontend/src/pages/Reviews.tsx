@@ -35,9 +35,12 @@ export function Reviews(): React.ReactElement {
       <div className="card">
         <h3 style={{ marginBottom: '1rem' }}>All Reviews</h3>
         {reviews.length > 0 ? reviews.map((r: any, i: number) => (
-          <div key={i} style={{ borderLeft: '4px solid #2E4A7A', padding: '1rem 1.25rem', marginBottom: '1rem', background: '#f9f9f9', borderRadius: 6 }}>
+          <div key={i} style={{ borderLeft: `4px solid ${r.is_visible === 0 ? '#dc2626' : '#2E4A7A'}`, padding: '1rem 1.25rem', marginBottom: '1rem', background: r.is_visible === 0 ? '#fff5f5' : '#f9f9f9', borderRadius: 6 }}>
+            {role === 'registrar' && r.is_visible === 0 && (
+              <span style={{ fontSize: 11, fontWeight: 700, background: '#dc2626', color: 'white', padding: '2px 8px', borderRadius: 20, marginBottom: 8, display: 'inline-block' }}>🚫 HIDDEN — 3+ taboo words</span>
+            )}
             <div style={{ color: '#f5a623', fontSize: '1.1rem', marginBottom: '.4rem' }}>{'⭐'.repeat(r.star_rating)} <span className="muted">({r.star_rating}/5)</span></div>
-            <p style={{ marginBottom: '.4rem' }}>{r.review_text}</p>
+            <p style={{ marginBottom: '.4rem' }}>{role === 'registrar' ? (r.review_text || r.filtered_text) : r.review_text}</p>
             {role === 'registrar' ? <p className="muted">Reviewer: <strong>{r.reviewer_name}</strong></p> : <p className="muted" style={{ fontStyle: 'italic' }}>Anonymous Student</p>}
           </div>
         )) : <p className="muted">No reviews yet for this course.</p>}
