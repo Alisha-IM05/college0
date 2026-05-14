@@ -16,6 +16,16 @@ export function Manage(): React.ReactElement {
     <PageLayout username={username} role="registrar" activePage="manage">
       <h2 style={{ marginBottom: '1.5rem' }}>Semester Management</h2>
       {message && <div className="info" style={{ marginBottom: '1rem' }}>{message}</div>}
+      {data.special_reg_students && data.special_reg_students.length > 0 && semester?.current_period === 'special_registration' && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <h3 style={{ marginBottom: '.5rem' }}>Students with Special Registration</h3>
+          <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+            {data.special_reg_students.map((s: any) => (
+              <li key={s.username} style={{ padding: '4px 0', color: '#1e40af', fontWeight: 600 }}>{s.username}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {semester ? (
         <div className="card">
           <h3 style={{ marginBottom: '.5rem' }}>{semester.name}</h3>
