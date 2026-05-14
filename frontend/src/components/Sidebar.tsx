@@ -77,16 +77,21 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
           <SidebarLink href="/instructor/courses" icon="📚" label="My Courses" active={activePage === 'instructor_courses'} />
           <SidebarLink href="/warnings" icon="⚠️" label="Warnings" active={activePage === 'warnings'} />
           <SidebarLink href="/complaints" icon="📢" label="Complaints" active={activePage === 'complaints'} />
+          <SidebarLink href="/flagged-gpas" icon="🚩" label="GPA Review" active={activePage === 'flagged_gpas'} />
+
         </>}
 
         {role === 'registrar' && <>
           <SidebarLink href="/semester" icon="📅" label="Semester" active={activePage === 'manage'} />
           <SidebarLink href="/courses/create" icon="➕" label="Courses" active={activePage === 'create'} />
+          <SidebarLink href="/reviews" icon="⭐" label="All Reviews" active={activePage === 'reviews'} />
           <SidebarLink href="/graduation/resolve" icon="🎓" label="Graduation" active={activePage === 'graduation'} />
           <SidebarLink href="/registrar/applications" icon="📝" label="Applications" active={activePage === 'registrar_applications'} />
           <SidebarLink href="/registrar/users" icon="👥" label="Users" active={activePage === 'registrar_users'} />
           <SidebarLink href="/complaints" icon="📢" label="Complaints" active={activePage === 'complaints'} />
           <SidebarLink href="/taboo" icon="🚫" label="Taboo Words" active={activePage === 'taboo'} />
+          <SidebarLink href="/flagged-gpas" icon="🚩" label="Flagged GPAs" active={activePage === 'flagged_gpas'} />
+          
         </>}
       </nav>
       {/* Quick login buttons */}

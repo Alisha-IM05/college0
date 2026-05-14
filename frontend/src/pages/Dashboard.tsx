@@ -12,7 +12,7 @@ const PERIOD_BLURB: Record<string, string> = {
 };
 
 export function Dashboard(): React.ReactElement {
-  const data = getPageData();
+  const data = getPageData() as any;
   const role = data.role || 'student';
   const username = data.username || '—';
   const semester = data.semester;
@@ -45,7 +45,7 @@ export function Dashboard(): React.ReactElement {
               <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>📊 Grade History</h3>
               <table>
                 <thead><tr><th>Course</th><th>Semester</th><th>Grade</th></tr></thead>
-                <tbody>{grades.map((g, i) => (
+                <tbody>{grades.map((g: any, i: number) => (
                   <tr key={i}><td>{g.course_name}</td><td style={{ color: '#64748b' }}>{g.semester_name}</td><td><strong>{g.letter_grade}</strong></td></tr>
                 ))}</tbody>
               </table>
@@ -53,17 +53,54 @@ export function Dashboard(): React.ReactElement {
           )}
         </>
       )}
+      {/* Registrar: all students + instructor stats */}
+      {role === 'registrar' && (
+        <>
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>🎓 All Students</h3>
+            <table>
+              <thead><tr><th>Username</th><th>Status</th><th>Semester GPA</th><th>Cumulative GPA</th><th>Credits</th><th>Honor Roll</th></tr></thead>
+              <tbody>{(data.all_students || []).map((s: any, i: number) => (
+                <tr key={i}>
+                  <td>{s.username}</td>
+                  <td>{s.status}</td>
+                  <td>{(s.semester_gpa ?? 0).toFixed(2)}</td>
+                  <td>{(s.cumulative_gpa ?? 0).toFixed(2)}</td>
+                  <td>{s.credits_earned ?? 0}</td>
+                  <td>{s.honor_roll > 0 ? '🏆 ' + s.honor_roll : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <h3 style={{ marginBottom: '1rem', fontSize: '1rem' }}>👨‍🏫 Instructor Stats</h3>
+            <table>
+              <thead><tr><th>Username</th><th>Status</th><th>Courses This Semester</th><th>Avg Class GPA</th></tr></thead>
+              <tbody>{(data.all_instructors || []).map((ins: any, i: number) => (
+                <tr key={i}>
+                  <td>{ins.username}</td>
+                  <td>{ins.status}</td>
+                  <td>{ins.course_count ?? 0}</td>
+                  <td>{ins.avg_class_gpa != null ? Number(ins.avg_class_gpa).toFixed(2) : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {/* Quick links */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '1rem', marginTop: '1rem' }}>
         <QuickCard href="/complaints" icon="📢" title="Complaints" desc="File or manage complaints." />
         {role === 'registrar' && <>
+          <QuickCard href="/flagged-gpas" icon="🚩" title="Flagged GPAs" desc="Review instructors with unusual class GPAs." />
           <QuickCard href="/taboo" icon="🚫" title="Taboo Words" desc="Manage banned words." />
           <QuickCard href="/semester" icon="📅" title="Semester" desc="Advance the semester period." />
           <QuickCard href="/courses/create" icon="➕" title="Courses" desc="Add or manage courses." />
           <QuickCard href="/graduation/resolve" icon="🎓" title="Graduation" desc="Review graduation requests." />
           <QuickCard href="/registrar/applications" icon="📝" title="Applications" desc="Approve pending applications." />
           <QuickCard href="/registrar/users" icon="👥" title="Users" desc="Manage user accounts." />
+          
         </>}
         {role === 'student' && <>
           <QuickCard href="/courses/register" icon="📚" title="Registration" desc="Browse and register for courses." />
@@ -81,6 +118,7 @@ export function Dashboard(): React.ReactElement {
         {role === 'instructor' && <>
           <QuickCard href="/instructor/courses" icon="📚" title="My Courses" desc="View and manage your courses." />
           <QuickCard href="/warnings" icon="⚠️" title="Warnings" desc="View warnings on your account." />
+          <QuickCard href="/flagged-gpas" icon="🚩" title="GPA Review" desc="Submit justification for flagged class GPAs." />
         </>}
       </div>
     </PageLayout>

@@ -38,7 +38,7 @@ def filter_review(text):
     Scans review text for taboo words using whole-word matching (H-017).
     Returns: (filtered_text, taboo_count)
     - filtered_text has bad words replaced with asterisks
-    - taboo_count is how many distinct taboo words were found
+    - taboo_count is the total number of taboo word occurrences found (not distinct words)
     """
     taboo_words = get_taboo_words()
     taboo_count = 0
@@ -47,8 +47,9 @@ def filter_review(text):
     for word in taboo_words:
         # H-017: whole-word matching — won't flag "badword" inside "notbadwordhere"
         pattern = r'\b' + re.escape(word) + r'\b'
-        if re.search(pattern, filtered_text, flags=re.IGNORECASE):
-            taboo_count += 1
+        matches = re.findall(pattern, filtered_text, flags=re.IGNORECASE)
+        if matches:
+            taboo_count += len(matches)  # count every occurrence, not just whether the word appeared
             replacement = '*' * len(word)
             filtered_text = re.sub(pattern, replacement, filtered_text, flags=re.IGNORECASE)
 
@@ -100,10 +101,11 @@ def submit_review(student_id, course_id, star_rating, review_text):
 
     # H-021/H-022: apply rules based on taboo word count
     if taboo_count >= 3:
-        # H-021: hide review entirely for 3+ taboo words
-        # H-022: issue 2 warnings
-        issue_warning(student_id, "Review hidden: contained 3 or more taboo words.")
-        issue_warning(student_id, "Second warning: review with 3+ taboo words was not published.")
+        # H-021: save review with is_visible=0 so it exists in DB but is hidden from all non-registrar views
+        # H-022: issue 2 warnings — issued one at a time so each one independently triggers suspension check
+        save_review(student_id, course_id, star_rating, review_text, filtered_text, is_visible=0)
+        issue_warning(student_id, f"Review hidden: contained {taboo_count} taboo word(s) — review not published.")
+        issue_warning(student_id, "Second warning issued: review with 3 or more taboo words is never shown.")
         return "warning:Your review was not posted because it contained too many inappropriate words. You have received 2 warnings."
 
     elif taboo_count in [1, 2]:
@@ -198,40 +200,55 @@ def update_course_rating(course_id):
 
 # ── WARNING FUNCTIONS ─────────────────────────────────────────────────────────
 
-def issue_warning(user_id, reason):
+def _insert_warning_only(user_id, reason):
     """
-    J-021: centralized warning helper used by all modules.
-    J-022: counts warnings by user.
-    J-024: suspends student after 3 warnings.
-    J-029: suspends instructor after 3 warnings.
-    H-023: checks warning threshold after each warning insertion.
+    Inserts a warning record WITHOUT triggering the suspension check.
+    Use this for system-generated academic/administrative warnings
+    (e.g. underenrolled, probation GPA) that should not count toward
+    the 3-warning conduct suspension threshold.
     """
     conn = get_connection()
+    conn.execute(
+        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
+        (user_id, reason)
+    )
+    conn.commit()
+    conn.close()
 
-    # save the warning
+
+def issue_warning(user_id, reason):
+    """
+    J-021: centralized conduct warning helper.
+    Inserts warning and checks threshold:
+      - Students: suspend_user() at 3 (fine required, registrar approves)
+      - Instructors: suspend_instructor() at 3 (no fine, wait for next semester)
+    Only use this for CONDUCT violations. For academic/admin notices
+    (underenrolled, GPA probation, missing grades) use _insert_warning_only().
+    """
+    conn = get_connection()
     conn.execute(
         "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
         (user_id, reason)
     )
     conn.commit()
 
-    # H-023 / J-022: count total warnings for this user
     count = conn.execute(
         "SELECT COUNT(*) as total FROM warnings WHERE user_id = ?",
         (user_id,)
     ).fetchone()['total']
 
-    # get the user's role
     user = conn.execute(
-        "SELECT role FROM users WHERE id = ?",
+        "SELECT role, status FROM users WHERE id = ?",
         (user_id,)
     ).fetchone()
 
     conn.close()
 
-    # J-024 / J-029: suspend at 3 warnings
-    if count >= 3 and user and user['role'] in ('student', 'instructor'):
-        suspend_user(user_id, "3 warnings accumulated — suspended for 1 semester")
+    if count >= 3 and user and user['status'] != 'suspended':
+        if user['role'] == 'student':
+            suspend_user(user_id, "3 conduct warnings accumulated — suspended for 1 semester")
+        elif user['role'] == 'instructor':
+            suspend_instructor(user_id, "3 conduct warnings accumulated — suspended until next semester")
 
 def get_user_warnings(user_id):
     """J-023: gets all warnings for a specific user"""
@@ -254,20 +271,167 @@ def get_warning_count(user_id):
     return count
 
 def suspend_user(user_id, reason):
-    """Suspends a user by updating their role to suspended"""
+    """
+    Suspends a user. Sets role AND status to 'suspended' so the frontend
+    gate can redirect them to /suspension regardless of which field it checks.
+    J-027: records a $200 fine in the fines table.
+    """
     conn = get_connection()
+
+    # Only suspend if not already suspended (avoid duplicate fines)
+    user = conn.execute("SELECT role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user and user['status'] == 'suspended':
+        conn.close()
+        return
+
     conn.execute(
         "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
         (user_id,)
     )
-    # J-027: record fine owed by suspended student
+
+    # J-027: $200 disciplinary fine
     conn.execute(
-        "INSERT INTO warnings (user_id, reason) VALUES (?, ?)",
-        (user_id, "FINE OWED: $200 suspension fine issued. Contact the registrar to pay and have your account reinstated.")
+        "INSERT INTO fines (user_id, amount, reason, paid, approved) VALUES (?, 200.00, ?, 0, 0)",
+        (user_id, reason)
     )
     conn.commit()
     conn.close()
-    print(f"User {user_id} has been suspended. Reason: {reason}")
+
+
+def suspend_instructor(user_id, reason):
+    """
+    Suspends an instructor without issuing a fine.
+    Instructors cannot pay their way out — they sit out until the registrar
+    reactivates them after the next semester (via reactivate_suspended_instructors).
+    Sets role AND status to 'suspended' so the frontend gate redirects them.
+    """
+    conn = get_connection()
+    user = conn.execute("SELECT role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user or user['status'] == 'suspended':
+        conn.close()
+        return
+    conn.execute(
+        "UPDATE users SET role = 'suspended', status = 'suspended' WHERE id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def reactivate_suspended_instructors():
+    """
+    Called when a new semester begins (advance_period creates a new semester).
+    Restores all suspended instructors to active so they can teach again.
+    Clears their warnings so the slate is clean for the new semester.
+    Does NOT touch students — student suspension requires fine payment + registrar approval.
+    """
+    conn = get_connection()
+    suspended_instructors = conn.execute(
+        """SELECT u.id FROM users u
+           WHERE u.status = 'suspended'
+           AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = u.id)"""
+    ).fetchall()
+    for row in suspended_instructors:
+        uid = row['id']
+        conn.execute(
+            "UPDATE users SET status = 'active', role = 'instructor' WHERE id = ?",
+            (uid,)
+        )
+        conn.execute("DELETE FROM warnings WHERE user_id = ?", (uid,))
+    conn.commit()
+    conn.close()
+
+
+def get_suspension_info(user_id):
+    """
+    Returns a dict with everything the suspension page needs:
+    - warning_count, warnings list, fine (amount, paid, approved), suspension reason
+    """
+    conn = get_connection()
+
+    warning_count = conn.execute(
+        "SELECT COUNT(*) as total FROM warnings WHERE user_id = ?", (user_id,)
+    ).fetchone()['total']
+
+    warnings = conn.execute(
+        "SELECT reason, created_at FROM warnings WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,)
+    ).fetchall()
+
+    fine = conn.execute(
+        "SELECT * FROM fines WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    conn.close()
+
+    return {
+        'warning_count': warning_count,
+        'warnings': [dict(w) for w in warnings],
+        'fine': dict(fine) if fine else None,
+    }
+
+
+def submit_fine_payment(user_id):
+    """
+    User clicks 'Pay Fine' — marks the fine as paid (submitted).
+    Account stays suspended until registrar approves (approved = 1).
+    """
+    conn = get_connection()
+    fine = conn.execute(
+        "SELECT id FROM fines WHERE user_id = ? AND approved = 0 ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    if not fine:
+        conn.close()
+        return False, "No outstanding fine found."
+
+    conn.execute(
+        "UPDATE fines SET paid = 1, paid_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (fine['id'],)
+    )
+    conn.commit()
+    conn.close()
+    return True, "Payment submitted. Your account will be reactivated once the registrar approves."
+
+
+def approve_fine_payment(user_id):
+    """
+    Registrar approves the fine payment — marks approved, clears all warnings,
+    and restores the account to active. Wiping warnings resets the count to 0
+    so the warnings page shows a clean slate.
+    """
+    conn = get_connection()
+    fine = conn.execute(
+        "SELECT id FROM fines WHERE user_id = ? AND paid = 1 AND approved = 0 ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    ).fetchone()
+
+    if not fine:
+        conn.close()
+        return False, "No pending fine payment found for this user."
+
+    # Approve the fine
+    conn.execute(
+        "UPDATE fines SET approved = 1, approved_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (fine['id'],)
+    )
+
+    # Wipe all warnings so the slate is clean
+    conn.execute("DELETE FROM warnings WHERE user_id = ?", (user_id,))
+
+    # Restore the correct role
+    in_students = conn.execute("SELECT id FROM students WHERE id = ?", (user_id,)).fetchone()
+    restored_role = 'student' if in_students else 'instructor'
+
+    conn.execute(
+        "UPDATE users SET status = 'active', role = ? WHERE id = ?",
+        (restored_role, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return True, f"Fine approved. Account reactivated as {restored_role}."
 
 
 # ── COMPLAINT FUNCTIONS ───────────────────────────────────────────────────────

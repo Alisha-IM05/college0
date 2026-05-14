@@ -1,5 +1,6 @@
 # Semester & Course Management by Tanzina Sumona
 from database.db import get_db
+from modules.conduct import issue_warning, _insert_warning_only, suspend_instructor
 
 
 PERIOD_ORDER = ['setup', 'registration', 'special_registration', 'running', 'grading']
@@ -74,37 +75,41 @@ def advance_period(semester_id):
             else:
                 year = int(current_name.split(" ")[1])
                 new_name = f"Spring {year + 1}"
-            # Warn instructors who didn't submit all grades
+
+            # Collect missing-grade warnings — fire AFTER conn closes to avoid lock
+            missing_grade_warnings = []
             courses_this_semester = conn.execute(
-                """SELECT * FROM courses
-                   WHERE semester_id = ? AND status = 'active'""",
+                "SELECT * FROM courses WHERE semester_id = ? AND status = 'active'",
                 (semester_id,)
             ).fetchall()
             for course in courses_this_semester:
                 enrolled_students = conn.execute(
-                    """SELECT student_id FROM enrollments
-                       WHERE course_id = ? AND status = 'enrolled'""",
+                    "SELECT student_id FROM enrollments WHERE course_id = ? AND status = 'enrolled'",
                     (course['id'],)
                 ).fetchall()
                 for student in enrolled_students:
                     grade = conn.execute(
-                        """SELECT * FROM grades
-                           WHERE student_id = ? AND course_id = ?""",
+                        "SELECT * FROM grades WHERE student_id = ? AND course_id = ?",
                         (student['student_id'], course['id'])
                     ).fetchone()
                     if grade is None:
-                        conn.execute(
-                            """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
-                            (
-                                course['instructor_id'],
-                                f'You did not submit all grades for {course["course_name"]} before the grading period ended'
-                            )
-                        )
+                        missing_grade_warnings.append((
+                            course['instructor_id'],
+                            f"You did not submit all grades for '{course['course_name']}' before the grading period ended."
+                        ))
                         break  # one warning per course is enough
-            conn.commit()
-            # Reset special_registration for all students
+
             conn.execute("UPDATE students SET special_registration = 0")
-            # Check if next semester already exists — don't create a duplicate
+            # Terminate any students flagged during grading
+            pending = conn.execute(
+                "SELECT id FROM students WHERE termination_pending = 1"
+            ).fetchall()
+            for s in pending:
+                conn.execute(
+                    "UPDATE users SET role = 'terminated' WHERE id = ?",
+                    (s['id'],)
+                )
+            conn.execute("UPDATE students SET termination_pending = 0")
             existing = conn.execute(
                 "SELECT * FROM semesters WHERE name = ?", (new_name,)
             ).fetchone()
@@ -119,6 +124,12 @@ def advance_period(semester_id):
                     (new_name,)
                 )
             conn.commit()
+            conn.close()
+
+            # Fire warnings after conn is fully closed — avoids "database is locked"
+            for user_id, reason in missing_grade_warnings:
+                issue_warning(user_id, reason)
+
             return f"New semester {new_name} created in setup period"
         current_index = PERIOD_ORDER.index(current_period)
         next_period = PERIOD_ORDER[current_index + 1]
@@ -251,8 +262,13 @@ def register_student(student_id, course_id):
             return 'Student has reached the maximum of 4 courses (enrolled + waitlisted combined)'
         # Check if student has taken this course before
         past_grade = conn.execute(
-            "SELECT * FROM grades WHERE student_id = ? AND course_id = ?",
-            (student_id, course_id)
+            """SELECT g.letter_grade FROM grades g
+               JOIN courses c1 ON g.course_id = c1.id
+               JOIN courses c2 ON c2.id = ?
+               WHERE g.student_id = ?
+               AND c1.course_name = c2.course_name
+               ORDER BY g.id DESC LIMIT 1""",
+            (course_id, student_id)
         ).fetchone()
         # Only allow retake if previous grade was F
         if past_grade and past_grade['letter_grade'] != 'F':
@@ -520,29 +536,27 @@ def admit_from_waitlist(course_id, student_id, instructor_id=None):
 # Reopens registration for affected students
 def enforce_minimums(semester_id):
     conn = get_db()
+    # Collect (user_id, reason) pairs to warn AFTER the connection closes.
+    # issue_warning() opens its own connection; calling it while conn is open
+    # causes "database is locked" on SQLite.
+    conduct_warnings = []   # list of (user_id, reason) — count toward suspension
+    instructors_to_suspend = []  # list of user_id — all courses cancelled
     try:
-        # Get all active courses for this semester
         courses = conn.execute(
-            """
-            SELECT * FROM courses
-            WHERE semester_id = ? AND status = 'active'
-            """,
+            "SELECT * FROM courses WHERE semester_id = ? AND status = 'active'",
             (semester_id,)
         ).fetchall()
-        # Check each course to see if it has enough students
+
         for course in courses:
             if course['enrolled_count'] < 3:
-                # Cancel the course
                 conn.execute(
                     "UPDATE courses SET status = 'cancelled' WHERE id = ?",
                     (course['id'],)
                 )
-                # Cancel all enrollments for this course
                 conn.execute(
                     "UPDATE enrollments SET status = 'cancelled' WHERE course_id = ?",
                     (course['id'],)
                 )
-                # Flag affected students for special registration
                 affected = conn.execute(
                     "SELECT student_id FROM enrollments WHERE course_id = ? AND status = 'cancelled'",
                     (course['id'],)
@@ -552,97 +566,94 @@ def enforce_minimums(semester_id):
                         "UPDATE students SET special_registration = 1 WHERE id = ?",
                         (s['student_id'],)
                     )
-                # Warn the instructor
-                conn.execute(
-                    """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
-                    (
-                        course['instructor_id'],
-                        'Warning: You are enrolled in fewer than 2 active courses this semester.'
-                    )
-                )
-        # Get all instructors who taught courses this semester
+                # Queue instructor warning — fired after conn closes
+                conduct_warnings.append((
+                    course['instructor_id'],
+                    f"Your course '{course['course_name']}' was cancelled due to low enrollment (fewer than 3 students)."
+                ))
+
         instructors = conn.execute(
-            """
-            SELECT DISTINCT instructor_id
-            FROM courses
-            WHERE semester_id = ?
-            """,
+            "SELECT DISTINCT instructor_id FROM courses WHERE semester_id = ?",
             (semester_id,)
         ).fetchall()
-        # Check if each instructor still has any active courses
+
         for instructor in instructors:
             active_count = conn.execute(
-                """
-                SELECT COUNT(*) as count
-                FROM courses
-                WHERE instructor_id = ?
-                AND semester_id = ?
-                AND status = 'active'
-                """,
+                """SELECT COUNT(*) as count FROM courses
+                   WHERE instructor_id = ? AND semester_id = ? AND status = 'active'""",
                 (instructor['instructor_id'], semester_id)
             ).fetchone()['count']
-            # If the instructor has no active courses, suspend them
             if active_count == 0:
-                conn.execute(
-                    """
-                    UPDATE users
-                    SET status = 'suspended'
-                    WHERE id = ? AND role = 'instructor'
-                    """,
-                    (instructor['instructor_id'],)
-                )
-        # Open special registration again
+                instructors_to_suspend.append(instructor['instructor_id'])
+
         cancelled_courses = conn.execute(
-            """SELECT * FROM courses
-               WHERE semester_id = ? AND status = 'cancelled'""",
+            "SELECT * FROM courses WHERE semester_id = ? AND status = 'cancelled'",
             (semester_id,)
         ).fetchall()
         cancelled_count = len(cancelled_courses)
 
-        # NOW safe to use cancelled_count
         if cancelled_count > 0:
             conn.execute(
-                """UPDATE semesters
-                   SET current_period = 'special_registration'
-                   WHERE id = ?""",
+                "UPDATE semesters SET current_period = 'special_registration' WHERE id = ?",
                 (semester_id,)
             )
 
-        warn_underenrolled_students(semester_id, conn)
+        # Collect underenrolled student notices (these use _insert_warning_only, no lock risk,
+        # but keep them deferred too for consistency)
+        underenrolled_notices = []
+        students = conn.execute(
+            """SELECT DISTINCT e.student_id
+               FROM enrollments e JOIN courses c ON e.course_id = c.id
+               WHERE c.semester_id = ? AND e.status = 'enrolled'""",
+            (semester_id,)
+        ).fetchall()
+        for student in students:
+            active_count = conn.execute(
+                """SELECT COUNT(*) as count FROM enrollments e
+                   JOIN courses c ON e.course_id = c.id
+                   WHERE e.student_id = ? AND c.semester_id = ?
+                   AND e.status = 'enrolled' AND c.status = 'active'""",
+                (student['student_id'], semester_id)
+            ).fetchone()['count']
+            if active_count < 2:
+                underenrolled_notices.append(student['student_id'])
+
         affected_students = conn.execute(
             """SELECT DISTINCT e.student_id
-               FROM enrollments e
-               JOIN courses c ON e.course_id = c.id
+               FROM enrollments e JOIN courses c ON e.course_id = c.id
                WHERE c.semester_id = ? AND e.status = 'cancelled'""",
             (semester_id,)
         ).fetchall()
         for s in affected_students:
             conn.execute(
-                """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
-                (s['student_id'],
-                 'One or more of your courses was cancelled. Special registration is now open for you.')
+                "INSERT INTO notifications (user_id, message) VALUES (?, ?)",
+                (s['student_id'], 'One or more of your courses was cancelled. Special registration is now open for you.')
             )
 
         affected_count = len(affected_students)
         conn.commit()
-
-        if cancelled_count == 0:
-            return 'Semester advanced to running. No courses were cancelled.'
-        else:
-            return (f'Semester advanced to running. '
-                    f'{cancelled_count} course(s) cancelled due to low enrollment. '
-                    f'{affected_count} student(s) given special registration.')
     finally:
         conn.close()
 
-# Warn students who are enrolled in fewer than 2 active courses
-# Only checks students in the given semester
-# Returns nothing (just updates the database)
-def warn_underenrolled_students(semester_id, conn=None):
-    close = False
-    if conn is None:
-        conn = get_db()
-        close = True
+    # ── Fire all warnings/suspensions AFTER the connection is closed ──────────
+    for user_id, reason in conduct_warnings:
+        issue_warning(user_id, reason)
+
+    for user_id in instructors_to_suspend:
+        suspend_instructor(user_id, "All courses this semester were cancelled due to low enrollment.")
+
+    for student_id in underenrolled_notices:
+        _insert_warning_only(
+            student_id,
+            'You are enrolled in fewer than 2 courses this semester — you may want to register for more.'
+        )
+
+    if cancelled_count == 0:
+        return 'Semester advanced to running. No courses were cancelled.'
+    else:
+        return (f'Semester advanced to running. '
+                f'{cancelled_count} course(s) cancelled due to low enrollment. '
+                f'{affected_count} student(s) given special registration.')
     try:
         # Get all students who are enrolled in at least one course this semester
         students = conn.execute(
@@ -669,17 +680,11 @@ def warn_underenrolled_students(semester_id, conn=None):
                 """,
                 (student['student_id'], semester_id)
             ).fetchone()['count']
-            # If the student has fewer than 2 active courses, send a warning
+            # G-005: warn student — administrative notice, does NOT count toward conduct suspension
             if active_count < 2:
-                conn.execute(
-                    """
-                    INSERT INTO warnings (user_id, reason)
-                    VALUES (?, ?)
-                    """,
-                    (
-                        student['student_id'],
-                        'You are enrolled in fewer than 2 courses this semester'
-                    )
+                _insert_warning_only(
+                    student['student_id'],
+                    'You are enrolled in fewer than 2 courses this semester — you may want to register for more.'
                 )
             conn.commit()
     finally:
@@ -883,22 +888,20 @@ def update_academic_standing(student_id, semester_gpa, cumulative_gpa):
         # Terminate the student if GPA is too low or they failed a course twice
         if cumulative_gpa < 2.0 or failed_twice_count > 0:
             conn.execute(
-                "UPDATE users SET role = 'terminated' WHERE id = ?",
+                "UPDATE students SET termination_pending = 1 WHERE id = ?",
                 (student_id,)
+            )
+            _insert_warning_only(
+                student_id,
+                'Your GPA has fallen below the minimum threshold. You will be terminated at the start of the next semester unless resolved.'
             )
             conn.commit()
             return
-        # Add a warning if the student needs a probation interview
+        # Academic notice — does NOT count toward conduct suspension threshold
         if 2.0 <= cumulative_gpa <= 2.25:
-            conn.execute(
-                """
-                INSERT INTO warnings (user_id, reason)
-                VALUES (?, ?)
-                """,
-                (
-                    student_id,
-                    'GPA between 2.0 and 2.25 — probation interview required'
-                )
+            _insert_warning_only(
+                student_id,
+                'GPA between 2.0 and 2.25 — probation interview required.'
             )
 
         # Count how many semesters this student has grades for
@@ -938,7 +941,13 @@ def apply_for_graduation(student_id):
         ).fetchone()
         # Check if student exists and has enough credits
         if student is None or student['credits_earned'] < 8:
-            return 'Student has not completed the required 8 courses'
+            # I-031/I-040: warn student for applying before completing 8 courses
+            if student is not None:
+                issue_warning(
+                    student_id,
+                    f"Reckless graduation application — you have only completed {student['credits_earned']} of 8 required courses."
+                )
+            return 'Student has not completed the required 8 courses. A warning has been issued.'
         # Check if there is already a pending graduation application
         existing_application = conn.execute(
             """
@@ -1018,18 +1027,13 @@ def resolve_graduation(application_id, approved):
                    WHERE id = ?""",
                 (application_id,)
             )
-            conn.execute(
-                """INSERT INTO warnings (user_id, reason)
-                   VALUES (?, ?)""",
-                (
-                    application['student_id'],
-                    'Reckless graduation application — required courses not covered'
-                )
-            )
+            student_id_rej = application['student_id']
             conn.commit()
+            conn.close()
+            issue_warning(student_id_rej, 'Reckless graduation application — required courses not covered.')
             return 'Application rejected. Warning issued to student'
     finally:
-        conn.close()
+        pass  # conn already closed above
         
 def use_honor_roll_to_remove_warning(student_id, warning_id):
     conn = get_db()
@@ -1119,12 +1123,11 @@ def resolve_gpa_flag(registrar_id, flag_id, decision):
                    WHERE id = ?""",
                 (flag_id,)
             )
-            conn.execute(
-                """INSERT INTO warnings (user_id, reason) VALUES (?, ?)""",
-                (flag['instructor_id'],
-                 f'Inadequate justification for flagged class GPA of {flag["class_gpa"]:.2f}')
-            )
+            instructor_id_warn = flag['instructor_id']
+            class_gpa_val = flag['class_gpa']
             conn.commit()
+            conn.close()
+            issue_warning(instructor_id_warn, f'Inadequate justification for flagged class GPA of {class_gpa_val:.2f}')
             return 'Warning issued to instructor'
         elif decision == 'terminate':
             conn.execute(

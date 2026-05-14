@@ -535,7 +535,39 @@ def terminate_user(user_id: int) -> tuple[bool, str]:
 
 
 def reactivate_user(user_id: int) -> tuple[bool, str]:
-    return _set_user_status(user_id, "active")
+    """Reactivate a suspended user and restore their original role.
+    conduct.py's suspend_user sets role='suspended' in addition to status='suspended',
+    so we need to restore the correct role on reactivation.
+    We infer the role from the students table: if a row exists there, they're a student,
+    otherwise they're an instructor."""
+    conn = get_db()
+    try:
+        user = conn.execute(
+            "SELECT id, role, status FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not user:
+            return False, "User not found."
+        if user["role"] == "registrar":
+            return False, "Cannot change status of a registrar account."
+
+        # Determine the correct role to restore
+        if user["role"] == "suspended":
+            # Role was overwritten by conduct.suspend_user — figure out the original role
+            in_students = conn.execute(
+                "SELECT id FROM students WHERE id = ?", (user_id,)
+            ).fetchone()
+            restored_role = "student" if in_students else "instructor"
+        else:
+            restored_role = user["role"]
+
+        conn.execute(
+            "UPDATE users SET status = 'active', role = ? WHERE id = ?",
+            (restored_role, user_id)
+        )
+        conn.commit()
+        return True, f"User reactivated as {restored_role}."
+    finally:
+        conn.close()
 
 
 def list_manageable_users() -> list:

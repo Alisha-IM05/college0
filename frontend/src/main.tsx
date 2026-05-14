@@ -26,6 +26,7 @@ import { MyReviews } from './pages/MyReviews';
 import { Home } from './pages/Home';
 import { Profile } from './pages/Profile';
 import { AIAssistant } from './pages/AIAssistant';
+import { Suspended } from './pages/Suspended';
 
 const CLERK_PAGES = new Set(['login', 'apply', 'apply_status']);
 
@@ -75,6 +76,8 @@ function renderPage(pageId: string): React.ReactElement {
       return <Profile />;
     case 'ai_assistant':
       return <AIAssistant />;
+    case 'suspended':
+      return <Suspended />;
   }
 }
 
