@@ -18,6 +18,8 @@ export function Dashboard(): React.ReactElement {
   const semester = data.semester;
   const student = data.student_data;
   const grades = data.grades || [];
+  const message = new URLSearchParams(window.location.search).get('message');
+
 
   return (
     <PageLayout username={username} role={role} activePage="dashboard">
@@ -25,12 +27,21 @@ export function Dashboard(): React.ReactElement {
       <div style={{ background: 'linear-gradient(135deg,#2E4A7A,#3d5f99)', borderRadius: 12, padding: '1.75rem 2rem', color: 'white', marginBottom: '1.5rem' }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', opacity: .6, marginBottom: 6 }}>{role.toUpperCase()} WORKSPACE</div>
         <h2 style={{ color: 'white', fontSize: '1.6rem', margin: '0 0 .5rem', fontWeight: 800 }}>Welcome back, {username}!</h2>
-        {semester && <p style={{ opacity: .75, margin: '0 0 1rem', fontSize: 14 }}>{PERIOD_BLURB[semester.current_period]}</p>}
+        {role === 'graduated'
+          ? <p style={{ opacity: .9, margin: '0 0 1rem', fontSize: 15, fontWeight: 600 }}>🎓 Congratulations! You have graduated with a Bachelor of Science in Computer Science.</p>
+          : semester && <p style={{ opacity: .75, margin: '0 0 1rem', fontSize: 14 }}>{PERIOD_BLURB[semester.current_period]}</p>
+        }
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {semester && <Chip>{semester.name}</Chip>}
           {student && <Chip>{student.status === 'probation' ? '⚠️ Probation' : (student.honor_roll ?? 0) > 0 ? '🏆 Honor Roll' : '✅ Good Standing'}</Chip>}
         </div>
       </div>
+
+      {message && (
+        <div className={message.toLowerCase().includes('warning') || message.toLowerCase().includes('not completed') ? 'error' : 'info'} style={{ marginBottom: '1rem' }}>
+          {message}
+        </div>
+      )}
 
       {/* Student stats */}
       {role === 'student' && student && (
@@ -110,9 +121,14 @@ export function Dashboard(): React.ReactElement {
             <div style={{ fontSize: 22, marginBottom: 8 }}>🎓</div>
             <h3>Apply for Graduation</h3>
             <p>Submit your graduation application.</p>
-            <form method="POST" action="/graduation/apply" style={{ marginTop: '.75rem' }}>
-              <button type="submit" style={{ padding: '6px 16px', fontSize: 13 }}>Apply</button>
-            </form>
+            <button
+              style={{ padding: '6px 16px', fontSize: 13, marginTop: '.75rem', cursor: 'pointer' }}
+              onClick={() => {
+                fetch('/graduation/apply', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+                  .then(r => { window.location.href = r.url || '/dashboard'; })
+                  .catch(() => alert('Something went wrong.'));
+              }}
+            >Apply</button>
           </div>
         </>}
         {role === 'instructor' && <>
