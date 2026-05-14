@@ -118,6 +118,7 @@ export function Dashboard(): React.ReactElement {
         {role === 'instructor' && <>
           <QuickCard href="/instructor/courses" icon="📚" title="My Courses" desc="View and manage your courses." />
           <QuickCard href="/warnings" icon="⚠️" title="Warnings" desc="View warnings on your account." />
+          <QuickCard href="/flagged-gpas" icon="🚩" title="GPA Review" desc="Submit justification for flagged class GPAs." />
         </>}
       </div>
     </PageLayout>
