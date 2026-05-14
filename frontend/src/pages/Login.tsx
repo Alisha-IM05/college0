@@ -54,6 +54,35 @@ export function Login(): React.ReactElement {
   }) {
     const [selected, setSelected] = useState('');
 
+    // If only one user, show a direct button instead of dropdown
+    if (users.length === 1) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#64748b' }}>
+            {label}
+          </label>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void doDemoLogin(users[0].username, users[0].password)}
+            style={{
+              padding: '8px 24px',
+              borderRadius: 8,
+              border: 'none',
+              background: color,
+              color: 'white',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {users[0].label} →
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
         <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#64748b' }}>
@@ -139,7 +168,7 @@ export function Login(): React.ReactElement {
 
         <div className="quick-login-strip">
           <p className="label">— Quick Login (Demo) —</p>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: "flex", gap: 12, flexDirection: "column" }}>
             <QuickDropdown label="Registrar" color="#dc2626" users={QUICK_LOGINS.registrar} />
             <QuickDropdown label="Instructor" color="#16a34a" users={QUICK_LOGINS.instructor} />
             <QuickDropdown label="Student" color="#7c3aed" users={QUICK_LOGINS.student} />

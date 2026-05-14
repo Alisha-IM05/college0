@@ -10,7 +10,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# alias so Alisha's code works too
 get_connection = get_db
 
 
@@ -41,23 +40,20 @@ def seed_data():
     print("Existing data cleared.")
 
     # ── USERS ─────────────────────────────────────────────────────────────────
-    # 1 registrar, 3 instructors (prof_demo is demo-accessible),
-    # 10 students (demo_student1 & demo_student2 are demo-accessible)
     users = [
-        ('registrar1',    'registrar1@college0.com', 'password123', 'registrar'),
-        ('prof_demo',     'demo_prof@college0.com',  'password123', 'instructor'),
-        ('prof_smith',    'smith@college0.com',       'password123', 'instructor'),
-        ('prof_jones',    'jones@college0.com',       'password123', 'instructor'),
-        ('demo_student1', 'demo1@college0.com',       'password123', 'student'),
-        ('demo_student2', 'demo2@college0.com',       'password123', 'student'),
-        ('alice',         'alice@college0.com',       'password123', 'student'),
-        ('bob',           'bob@college0.com',         'password123', 'student'),
-        ('carol',         'carol@college0.com',       'password123', 'student'),
-        ('david',         'david@college0.com',       'password123', 'student'),
-        ('eve',           'eve@college0.com',         'password123', 'student'),
-        ('frank',         'frank@college0.com',       'password123', 'student'),
-        ('grace',         'grace@college0.com',       'password123', 'student'),
-        ('henry',         'henry@college0.com',       'password123', 'student'),
+        ('registrar1',    'registrar1@college0.com',  'password123', 'registrar'),
+        ('prof_smith',    'smith@college0.com',        'password123', 'instructor'),
+        ('prof_jones',    'jones@college0.com',        'password123', 'instructor'),
+        ('demo_student1', 'demo1@college0.com',        'password123', 'student'),
+        ('demo_student2', 'demo2@college0.com',        'password123', 'student'),
+        ('alice',         'alice@college0.com',        'password123', 'student'),
+        ('bob',           'bob@college0.com',          'password123', 'student'),
+        ('carol',         'carol@college0.com',        'password123', 'student'),
+        ('david',         'david@college0.com',        'password123', 'student'),
+        ('eve',           'eve@college0.com',          'password123', 'student'),
+        ('frank',         'frank@college0.com',        'password123', 'student'),
+        ('grace',         'grace@college0.com',        'password123', 'student'),
+        ('henry',         'henry@college0.com',        'password123', 'student'),
     ]
 
     for username, email, password, role in users:
@@ -66,138 +62,45 @@ def seed_data():
             (username, email, password, role)
         )
         if role == 'student':
-            user = conn.execute(
-                "SELECT id FROM users WHERE username = ?", (username,)
-            ).fetchone()
+            user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
             if user:
-                conn.execute(
-                    "INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],)
-                )
+                conn.execute("INSERT OR IGNORE INTO students (id) VALUES (?)", (user['id'],))
     conn.commit()
 
     def uid(username):
-        row = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         return row['id'] if row else None
 
-    demo_prof_id = uid('prof_demo')
-    smith_id     = uid('prof_smith')
-    jones_id     = uid('prof_jones')
-    demo1_id     = uid('demo_student1')
-    demo2_id     = uid('demo_student2')
-    alice_id     = uid('alice')
-    bob_id       = uid('bob')
-    carol_id     = uid('carol')
-    david_id     = uid('david')
-    eve_id       = uid('eve')
-    frank_id     = uid('frank')
-    grace_id     = uid('grace')
-    henry_id     = uid('henry')
+    smith_id = uid('prof_smith')
+    jones_id = uid('prof_jones')
+    demo1_id = uid('demo_student1')
+    demo2_id = uid('demo_student2')
 
-    # ── SIX SEMESTERS (all start at setup) ───────────────────────────────────
-    semesters = [
-        (1, 'Fall 2024',   'setup'),
-        (2, 'Spring 2025', 'setup'),
-        (3, 'Summer 2025', 'setup'),
-        (4, 'Fall 2025',   'setup'),
-        (5, 'Spring 2026', 'setup'),
-        (6, 'Fall 2026',   'setup'),
-    ]
-    for sem_id, name, period in semesters:
-        conn.execute(
-            "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (?, ?, ?)",
-            (sem_id, name, period)
-        )
+    # ── TWO SEMESTERS ─────────────────────────────────────────────────────────
+    conn.execute("INSERT INTO semesters (id, name, current_period) VALUES (1, 'Fall 2025',   'grading')")
+    conn.execute("INSERT INTO semesters (id, name, current_period) VALUES (2, 'Spring 2026', 'setup')")
     conn.commit()
 
-    # ── COURSES ───────────────────────────────────────────────────────────────
-    # Columns: course_name, instructor_id, time_slot, day_of_week,
-    #          start_time, end_time, capacity, semester_id, enrolled_count, status
-    #
-    # SEMESTER 1 & 2 SCENARIO MAP (same pattern both semesters):
-    #
-    #  [NORMAL]       CS101/CS202     — demo_student1 enrolls here to show normal flow
-    #  [CONFLICT A]   CS101+MATH101 / CS202+MATH201  → Mon/Wed 08:00-09:30
-    #  [CONFLICT B]   CS201+BUS101  / CS301+PHYS101  → Tue/Thu 10:00-11:30
-    #  [FULL+WAITLIST] ENG101 (sem1) / ENG201 (sem2) → cap=3, filled by background students
-    #                  demo_student2 pre-waitlisted (pos 1), enrolled in conflicting Fri course
-    #                  → instructor blocked when trying to admit demo_student2 (UC-18 exception)
-    #                  → demo_student1 joins waitlist naturally during demo (pos 2)
-    #  [UNDER-ENROLL] BUS101 (sem1) / PHYS101 (sem2) → demo_student1 + 1 other = 2 total → cancels
-    #                  → triggers UC-19 special registration for demo_student1
-    #  [UC-18 BLOCK]  SOC101 (sem1) / SOC201 (sem2) → same Fri slot as ENG101/ENG201
-    #                  → demo_student2 enrolled here; causes conflict block on waitlist admit
-    #
-    # enrolled_count matches exactly the number of enrollment rows seeded below.
-    #
-    # SEMESTERS 3-6: all normal, 3-5 background students per course, no edge cases.
-
-    all_courses = [
-        # ── Semester 1: Fall 2024 ─────────────────────────────────────────────
-        # CS101: demo_student1 enrolls here during demo (normal flow). 3 background students pre-seeded.
-        ('CS101 - Intro to Computing',  demo_prof_id, 'Mon/Wed', 1, '08:00', '09:30',  5, 1, 3, 'active'),
-        # CS201: conflict B partner (same Tue/Thu 10:00 slot as BUS101). 4 background students.
-        ('CS201 - Data Structures',     demo_prof_id, 'Tue/Thu', 3, '10:00', '11:30',  5, 1, 4, 'active'),
-        # MATH101: conflict A partner (same Mon/Wed 08:00 slot as CS101). 4 background students.
-        ('MATH101 - Calculus I',        smith_id,     'Mon/Wed', 1, '08:00', '09:30',  5, 1, 4, 'active'),
-        # ENG101: FULL (cap=3). demo_student2 on waitlist pos 1 with Fri conflict. demo_student1 joins pos 2 during demo.
-        ('ENG101 - English Comp',       jones_id,     'Fri',     5, '09:00', '11:00',  3, 1, 3, 'active'),
-        # BUS101: UNDER-ENROLL. demo_student1 + eve = 2 students → cancels → UC-19 special reg.
-        ('BUS101 - Business Writing',   jones_id,     'Tue/Thu', 3, '10:00', '11:30',  5, 1, 2, 'active'),
-        # SOC101: UC-18 BLOCK. Same Fri slot as ENG101. demo_student2 enrolled here.
-        ('SOC101 - Intro to Sociology', smith_id,     'Fri',     5, '09:00', '11:00',  5, 1, 1, 'active'),
-
-        # ── Semester 2: Spring 2025 ───────────────────────────────────────────
-        # CS202: demo_student1 enrolls here during demo (normal flow). 3 background students pre-seeded.
-        ('CS202 - Algorithms',          demo_prof_id, 'Mon/Wed', 1, '08:00', '09:30',  5, 2, 3, 'active'),
-        # CS301: conflict B partner (same Tue/Thu 10:00 slot as PHYS101). 4 background students.
-        ('CS301 - Operating Systems',   demo_prof_id, 'Tue/Thu', 3, '10:00', '11:30',  5, 2, 4, 'active'),
-        # MATH201: conflict A partner (same Mon/Wed 08:00 slot as CS202). 4 background students.
-        ('MATH201 - Calculus II',       smith_id,     'Mon/Wed', 1, '08:00', '09:30',  5, 2, 4, 'active'),
-        # ENG201: FULL (cap=3). demo_student2 on waitlist pos 1 with Fri conflict. demo_student1 joins pos 2 during demo.
-        ('ENG201 - Technical Writing',  jones_id,     'Fri',     5, '13:00', '15:00',  3, 2, 3, 'active'),
-        # PHYS101: UNDER-ENROLL. demo_student1 + eve = 2 students → cancels → UC-19 special reg.
-        ('PHYS101 - Physics I',         smith_id,     'Tue/Thu', 3, '10:00', '11:30',  5, 2, 2, 'active'),
-        # SOC201: UC-18 BLOCK. Same Fri slot as ENG201. demo_student2 enrolled here.
-        ('SOC201 - Social Theory',      smith_id,     'Fri',     5, '13:00', '15:00',  5, 2, 1, 'active'),
-
-        # ── Semester 3: Summer 2025 (all normal) ──────────────────────────────
-        ('CS150 - Intro to Python',     demo_prof_id, 'Mon/Wed', 1, '09:00', '10:30', 30, 3, 5, 'active'),
-        ('CS220 - Database Systems',    demo_prof_id, 'Tue/Thu', 3, '11:00', '12:30', 30, 3, 5, 'active'),
-        ('MATH150 - Discrete Math',     jones_id,     'Mon/Wed', 1, '13:00', '14:30', 30, 3, 4, 'active'),
-        ('BUS201 - Marketing Basics',   jones_id,     'Tue/Thu', 3, '08:00', '09:30', 30, 3, 4, 'active'),
-        ('PHYS201 - Physics II',        smith_id,     'Wed/Fri', 4, '10:00', '11:30', 30, 3, 3, 'active'),
-
-        # ── Semester 4: Fall 2025 (all normal) ───────────────────────────────
-        ('CS302 - Computer Networks',   demo_prof_id, 'Mon/Wed', 1, '08:00', '09:30', 30, 4, 5, 'active'),
-        ('CS401 - Software Engineering',demo_prof_id, 'Tue/Thu', 3, '10:00', '11:30', 30, 4, 5, 'active'),
-        ('MATH301 - Linear Algebra',    smith_id,     'Wed/Fri', 4, '13:00', '14:30', 30, 4, 4, 'active'),
-        ('ENG301 - Advanced Writing',   jones_id,     'Fri',     5, '09:00', '11:00', 30, 4, 4, 'active'),
-        ('BUS301 - Business Analytics', smith_id,     'Tue/Thu', 3, '08:00', '09:30', 30, 4, 3, 'active'),
-
-        # ── Semester 5: Spring 2026 (all normal) ─────────────────────────────
-        ('CS402 - Machine Learning',    demo_prof_id, 'Mon/Wed', 1, '10:00', '11:30', 30, 5, 5, 'active'),
-        ('CS450 - Cybersecurity',       demo_prof_id, 'Tue/Thu', 3, '13:00', '14:30', 30, 5, 5, 'active'),
-        ('MATH401 - Statistics',        smith_id,     'Mon/Wed', 1, '08:00', '09:30', 30, 5, 4, 'active'),
-        ('PHYS301 - Quantum Mechanics', jones_id,     'Wed/Fri', 4, '11:00', '12:30', 30, 5, 4, 'active'),
-        ('ENG401 - Creative Writing',   jones_id,     'Fri',     5, '13:00', '15:00', 30, 5, 3, 'active'),
-
-        # ── Semester 6: Fall 2026 (all normal) ───────────────────────────────
-        ('CS501 - AI Foundations',      demo_prof_id, 'Mon/Wed', 1, '10:00', '11:30', 30, 6, 5, 'active'),
-        ('CS520 - Cloud Computing',     demo_prof_id, 'Tue/Thu', 3, '13:00', '14:30', 30, 6, 5, 'active'),
-        ('MATH501 - Real Analysis',     smith_id,     'Wed/Fri', 4, '08:00', '09:30', 30, 6, 4, 'active'),
-        ('BUS401 - Entrepreneurship',   jones_id,     'Tue/Thu', 3, '11:00', '12:30', 30, 6, 4, 'active'),
-        ('ENG501 - Literature Survey',  smith_id,     'Fri',     5, '09:00', '11:00', 30, 6, 3, 'active'),
+    # ── FALL 2025 COURSES (10 courses — completed semester) ───────────────────
+    fall_courses = [
+        ('CS100 - Intro to CS',       'Mon/Wed', 1, '08:00', '09:30', 10, smith_id),
+        ('CS110 - Web Dev Basics',    'Tue/Thu', 3, '08:00', '09:30', 10, smith_id),
+        ('CS120 - Data Structures',   'Mon/Wed', 1, '10:00', '11:30', 10, smith_id),
+        ('CS130 - Databases',         'Tue/Thu', 3, '10:00', '11:30', 10, smith_id),
+        ('CS140 - Software Eng',      'Fri',     5, '09:00', '10:30', 10, smith_id),
+        ('MATH100 - Pre-Calculus',    'Mon/Wed', 1, '12:00', '13:30', 10, jones_id),
+        ('MATH110 - Statistics',      'Tue/Thu', 3, '12:00', '13:30', 10, jones_id),
+        ('ENG100 - Academic Writing', 'Mon/Wed', 1, '14:00', '15:30', 10, jones_id),
+        ('PHYS100 - Physics I',       'Tue/Thu', 3, '14:00', '15:30', 10, jones_id),
+        ('HIST100 - World History',   'Fri',     5, '11:00', '12:30', 10, jones_id),
     ]
-
-    for (name, inst_id, slot, day, start, end, cap, sem_id, enrolled, status) in all_courses:
+    for name, slot, day, start, end, cap, inst_id in fall_courses:
         conn.execute(
-            """INSERT OR IGNORE INTO courses
+            """INSERT INTO courses
                (course_name, instructor_id, time_slot, day_of_week, start_time, end_time,
                 capacity, semester_id, enrolled_count, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, inst_id, slot, day, start, end, cap, sem_id, enrolled, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'active')""",
+            (name, inst_id, slot, day, start, end, cap)
         )
     conn.commit()
 
@@ -208,120 +111,146 @@ def seed_data():
         ).fetchone()
         return row['id'] if row else None
 
-    # ── SEMESTER 1 ENROLLMENTS ────────────────────────────────────────────────
+    def enroll(username, course_name, sem_id):
+        student_id = uid(username)
+        course_id  = cid(course_name, sem_id)
+        if student_id and course_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
+                (student_id, course_id)
+            )
+            conn.execute(
+                "UPDATE courses SET enrolled_count = enrolled_count + 1 WHERE id = ?",
+                (course_id,)
+            )
 
-    # CS101 [NORMAL] — 3 background students pre-seeded; demo_student1 enrolls during demo
-    for sid in [alice_id, bob_id, carol_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('CS101 - Intro to Computing', 1)))
+    def add_grade(username, course_name, sem_id, letter, numeric):
+        student_id = uid(username)
+        course_id  = cid(course_name, sem_id)
+        if student_id and course_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO grades (student_id, course_id, letter_grade, numeric_value) VALUES (?, ?, ?, ?)",
+                (student_id, course_id, letter, numeric)
+            )
 
-    # CS201 [CONFLICT B] — 4 background students (same slot as BUS101)
-    for sid in [alice_id, bob_id, carol_id, david_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('CS201 - Data Structures', 1)))
+    def waitlist(username, course_name, sem_id, position):
+        student_id = uid(username)
+        course_id  = cid(course_name, sem_id)
+        if student_id and course_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO waitlist (student_id, course_id, position) VALUES (?, ?, ?)",
+                (student_id, course_id, position)
+            )
 
-    # MATH101 [CONFLICT A] — 4 background students (same slot as CS101)
-    for sid in [eve_id, frank_id, grace_id, henry_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('MATH101 - Calculus I', 1)))
-
-    # ENG101 [FULL cap=3] — alice, bob, carol fill it; demo_student2 on waitlist pos 1 (blocked by conflict)
-    for sid in [alice_id, bob_id, carol_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('ENG101 - English Comp', 1)))
-
-    # BUS101 [UNDER-ENROLL] — demo_student1 + eve = 2 → cancels → UC-19 special reg for demo_student1
-    for sid in [demo1_id, eve_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('BUS101 - Business Writing', 1)))
-
-    # SOC101 [UC-18 BLOCK] — demo_student2 only; same Fri 09:00-11:00 slot as ENG101
-    conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                 (demo2_id, cid('SOC101 - Intro to Sociology', 1)))
-
-    # Waitlist: demo_student2 at pos 1 on ENG101 — instructor gets blocked due to SOC101 conflict
-    conn.execute("INSERT OR IGNORE INTO waitlist (student_id, course_id, position) VALUES (?, ?, 1)",
-                 (demo2_id, cid('ENG101 - English Comp', 1)))
-
-    conn.commit()
-
-    # ── SEMESTER 2 ENROLLMENTS ────────────────────────────────────────────────
-
-    # CS202 [NORMAL] — 3 background students pre-seeded; demo_student1 enrolls during demo
-    for sid in [alice_id, bob_id, carol_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('CS202 - Algorithms', 2)))
-
-    # CS301 [CONFLICT B] — 4 background students (same slot as PHYS101)
-    for sid in [alice_id, bob_id, carol_id, david_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('CS301 - Operating Systems', 2)))
-
-    # MATH201 [CONFLICT A] — 4 background students (same slot as CS202)
-    for sid in [eve_id, frank_id, grace_id, henry_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('MATH201 - Calculus II', 2)))
-
-    # ENG201 [FULL cap=3] — alice, bob, carol fill it; demo_student2 on waitlist pos 1 (blocked by conflict)
-    for sid in [alice_id, bob_id, carol_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('ENG201 - Technical Writing', 2)))
-
-    # PHYS101 [UNDER-ENROLL] — demo_student1 + eve = 2 → cancels → UC-19 special reg for demo_student1
-    for sid in [demo1_id, eve_id]:
-        conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                     (sid, cid('PHYS101 - Physics I', 2)))
-
-    # SOC201 [UC-18 BLOCK] — demo_student2 only; same Fri 13:00-15:00 slot as ENG201
-    conn.execute("INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                 (demo2_id, cid('SOC201 - Social Theory', 2)))
-
-    # Waitlist: demo_student2 at pos 1 on ENG201 — instructor gets blocked due to SOC201 conflict
-    conn.execute("INSERT OR IGNORE INTO waitlist (student_id, course_id, position) VALUES (?, ?, 1)",
-                 (demo2_id, cid('ENG201 - Technical Writing', 2)))
-
-    conn.commit()
-
-    # ── SEMESTERS 3-6 ENROLLMENTS (all normal, actual rows) ──────────────────
-    # enrolled_count in courses table above matches these row counts exactly
-    normal_enrollments = [
-        # Semester 3
-        ('CS150 - Intro to Python',      3, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('CS220 - Database Systems',     3, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('MATH150 - Discrete Math',      3, [frank_id, grace_id, henry_id, alice_id]),         # 4
-        ('BUS201 - Marketing Basics',    3, [frank_id, grace_id, henry_id, bob_id]),           # 4
-        ('PHYS201 - Physics II',         3, [carol_id, david_id, eve_id]),                     # 3
-        # Semester 4
-        ('CS302 - Computer Networks',    4, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('CS401 - Software Engineering', 4, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('MATH301 - Linear Algebra',     4, [frank_id, grace_id, henry_id, alice_id]),         # 4
-        ('ENG301 - Advanced Writing',    4, [frank_id, grace_id, henry_id, bob_id]),           # 4
-        ('BUS301 - Business Analytics',  4, [carol_id, david_id, eve_id]),                     # 3
-        # Semester 5
-        ('CS402 - Machine Learning',     5, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('CS450 - Cybersecurity',        5, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('MATH401 - Statistics',         5, [frank_id, grace_id, henry_id, alice_id]),         # 4
-        ('PHYS301 - Quantum Mechanics',  5, [frank_id, grace_id, henry_id, bob_id]),           # 4
-        ('ENG401 - Creative Writing',    5, [carol_id, david_id, eve_id]),                     # 3
-        # Semester 6
-        ('CS501 - AI Foundations',       6, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('CS520 - Cloud Computing',      6, [alice_id, bob_id, carol_id, david_id, eve_id]),  # 5
-        ('MATH501 - Real Analysis',      6, [frank_id, grace_id, henry_id, alice_id]),         # 4
-        ('BUS401 - Entrepreneurship',    6, [frank_id, grace_id, henry_id, bob_id]),           # 4
-        ('ENG501 - Literature Survey',   6, [carol_id, david_id, eve_id]),                     # 3
+    # ── FALL 2025 ENROLLMENTS & GRADES ────────────────────────────────────────
+    fall_data = [
+        ('alice', 'CS100 - Intro to CS',       'A',  4.0),
+        ('alice', 'MATH100 - Pre-Calculus',    'A',  4.0),
+        ('alice', 'ENG100 - Academic Writing', 'B+', 3.3),
+        ('bob',   'CS100 - Intro to CS',       'B',  3.0),
+        ('bob',   'CS110 - Web Dev Basics',    'B+', 3.3),
+        ('bob',   'MATH100 - Pre-Calculus',    'B',  3.0),
+        ('carol', 'CS120 - Data Structures',   'C+', 2.3),
+        ('carol', 'MATH110 - Statistics',      'B-', 2.7),
+        ('carol', 'ENG100 - Academic Writing', 'B',  3.0),
+        ('david', 'CS130 - Databases',         'A-', 3.7),
+        ('david', 'PHYS100 - Physics I',       'A',  4.0),
+        ('david', 'HIST100 - World History',   'A-', 3.7),
+        ('eve',   'CS140 - Software Eng',      'C',  2.0),
+        ('eve',   'MATH110 - Statistics',      'C+', 2.3),
+        ('frank', 'ENG100 - Academic Writing', 'B-', 2.7),
+        ('frank', 'HIST100 - World History',   'C',  2.0),
+        ('grace', 'CS100 - Intro to CS',       'A',  4.0),
+        ('grace', 'PHYS100 - Physics I',       'A-', 3.7),
+        ('henry', 'CS110 - Web Dev Basics',    'C+', 2.3),
+        ('henry', 'MATH100 - Pre-Calculus',    'C',  2.0),
     ]
-
-    for course_name, sem_id, students in normal_enrollments:
-        course_id = cid(course_name, sem_id)
-        for sid in students:
-            if sid and course_id:
-                conn.execute(
-                    "INSERT OR IGNORE INTO enrollments (student_id, course_id, status) VALUES (?, ?, 'enrolled')",
-                    (sid, course_id)
-                )
+    for username, course, letter, numeric in fall_data:
+        enroll(username, course, 1)
+        add_grade(username, course, 1, letter, numeric)
     conn.commit()
 
-    # ── TABOO WORDS ───────────────────────────────────────────────────────────
+    # ── SPRING 2026 COURSES (10 courses — live demo semester) ─────────────────
+    # [NORMAL]   CS101, MATH101        — open seats, enroll demo students live
+    # [CANCEL]   CS201, MATH201        — only 2 enrolled, will cancel when enforced
+    # [WAITLIST] CS301, ENG101         — cap=5, full + 3 on waitlist
+    # [CONFLICT] CS401 & CS450         — same Mon/Wed 9am slot (Smith)
+    # [CONFLICT] PHYS101 & PHYS201     — same Tue/Thu 11am slot (Jones)
+    spring_courses = [
+        ('CS101 - Intro to Computing', 'Mon/Wed', 1, '08:00', '09:30', 10, smith_id),
+        ('CS201 - Discrete Math',      'Tue/Thu', 3, '10:00', '11:30', 10, smith_id),
+        ('CS301 - Algorithms',         'Fri',     5, '13:00', '14:30',  5, smith_id),
+        ('CS401 - Operating Systems',  'Mon/Wed', 1, '09:00', '10:30', 10, smith_id),
+        ('CS450 - Computer Networks',  'Mon/Wed', 1, '09:00', '10:30', 10, smith_id),
+        ('MATH101 - Calculus I',       'Tue/Thu', 3, '08:00', '09:30', 10, jones_id),
+        ('MATH201 - Calculus II',      'Wed/Fri', 4, '08:00', '09:30', 10, jones_id),
+        ('ENG101 - English Comp',      'Mon/Wed', 1, '14:00', '15:30',  5, jones_id),
+        ('PHYS101 - Physics I',        'Tue/Thu', 3, '11:00', '12:30', 10, jones_id),
+        ('PHYS201 - Physics II',       'Tue/Thu', 3, '11:00', '12:30', 10, jones_id),
+    ]
+    for name, slot, day, start, end, cap, inst_id in spring_courses:
+        conn.execute(
+            """INSERT INTO courses
+               (course_name, instructor_id, time_slot, day_of_week, start_time, end_time,
+                capacity, semester_id, enrolled_count, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 2, 0, 'active')""",
+            (name, inst_id, slot, day, start, end, cap)
+        )
+    conn.commit()
+
+    # Demo students NOT enrolled — enroll live during demo
+    conn.execute("UPDATE students SET semester_gpa=0.0, cumulative_gpa=0.0, credits_earned=0, honor_roll=0 WHERE id=?", (demo1_id,))
+    conn.execute("UPDATE students SET semester_gpa=3.8, cumulative_gpa=3.6, credits_earned=4,  honor_roll=1 WHERE id=?", (demo2_id,))
+
+    # NORMAL courses
+    for s in ['alice', 'bob', 'carol', 'david']:
+        enroll(s, 'CS101 - Intro to Computing', 2)
+    for s in ['alice', 'bob', 'carol']:
+        enroll(s, 'MATH101 - Calculus I', 2)
+
+    # CANCEL courses
+    for s in ['eve', 'frank']:
+        enroll(s, 'CS201 - Discrete Math', 2)
+        enroll(s, 'MATH201 - Calculus II', 2)
+
+    # WAITLIST courses (cap=5, 5 enrolled + 3 on waitlist)
+    for s in ['alice', 'bob', 'carol', 'david', 'grace']:
+        enroll(s, 'CS301 - Algorithms', 2)
+        enroll(s, 'ENG101 - English Comp', 2)
+    for s, pos in [('henry', 1), ('eve', 2), ('frank', 3)]:
+        waitlist(s, 'CS301 - Algorithms', 2, pos)
+        waitlist(s, 'ENG101 - English Comp', 2, pos)
+
+    # CONFLICT courses
+    for s in ['alice', 'bob', 'carol']:
+        enroll(s, 'CS401 - Operating Systems', 2)
+    for s in ['david', 'grace', 'henry']:
+        enroll(s, 'CS450 - Computer Networks', 2)
+    for s in ['alice', 'bob', 'carol']:
+        enroll(s, 'PHYS101 - Physics I', 2)
+    for s in ['david', 'grace', 'henry']:
+        enroll(s, 'PHYS201 - Physics II', 2)
+
+    # Background student stats
+    background_stats = [
+        ('alice', 3.8, 3.6, 60, 1),
+        ('bob',   3.2, 3.0, 45, 0),
+        ('carol', 2.9, 2.8, 30, 0),
+        ('david', 3.5, 3.3, 75, 1),
+        ('eve',   2.5, 2.6, 15, 0),
+        ('frank', 3.0, 2.9, 20, 0),
+        ('grace', 3.9, 3.8, 90, 1),
+        ('henry', 2.8, 2.7, 10, 0),
+    ]
+    for username, sem_gpa, cum_gpa, credits, honor in background_stats:
+        sid = uid(username)
+        if sid:
+            conn.execute(
+                "UPDATE students SET semester_gpa=?, cumulative_gpa=?, credits_earned=?, honor_roll=? WHERE id=?",
+                (sem_gpa, cum_gpa, credits, honor, sid)
+            )
+
+    # Taboo words
     for word in ['hate', 'stupid', 'idiot', 'terrible', 'awful']:
         conn.execute("INSERT OR IGNORE INTO taboo_words (word) VALUES (?)", (word,))
 
@@ -333,30 +262,21 @@ def seed_data():
 if __name__ == "__main__":
     init_db()
     seed_data()
-    print("\nDone! Run 'python3 app.py' to start the website.")
-    print("Login at http://127.0.0.1:5001")
-    print("\nAccounts (all password: password123):")
+    print("\nDone! Run 'python3 app.py' to start.")
+    print("Login at http://127.0.0.1:5000  (all passwords: password123)")
+    print("\nAccounts:")
     print("  registrar1    — registrar")
-    print("  prof_demo     — demo instructor (2 courses per semester)")
-    print("  prof_smith    — instructor")
-    print("  prof_jones    — instructor")
-    print("  demo_student1 — demo student #1")
-    print("  demo_student2 — demo student #2")
+    print("  prof_smith    — instructor (5 courses each semester)")
+    print("  prof_jones    — instructor (5 courses each semester)")
+    print("  demo_student1 — freshman, 0 credits, NOT enrolled (enroll live)")
+    print("  demo_student2 — 4 credits + honor roll, NOT enrolled (enroll live)")
     print("  alice/bob/carol/david/eve/frank/grace/henry — background students")
-    print("")
-    print("Semester 1 & 2 scenario map (same pattern both semesters):")
-    print("  [NORMAL]        CS101 (sem1) / CS202 (sem2)")
-    print("                  3 background students pre-seeded; demo_student1 enrolls here during demo")
-    print("  [CONFLICT A]    CS101 + MATH101 / CS202 + MATH201  → Mon/Wed 08:00-09:30")
-    print("                  demo_student1 tries MATH101/MATH201 after enrolling in CS101/CS202 → blocked")
-    print("  [CONFLICT B]    CS201 + BUS101 (sem1) / CS301 + PHYS101 (sem2)  → Tue/Thu 10:00-11:30")
-    print("  [FULL+WAITLIST] ENG101 (sem1) / ENG201 (sem2)  cap=3, filled by alice/bob/carol")
-    print("                  demo_student2 pre-waitlisted pos 1, enrolled in conflicting SOC101/SOC201")
-    print("                  → instructor blocked admitting demo_student2 (UC-18 exceptional)")
-    print("                  → demo_student1 joins waitlist pos 2 naturally during demo")
-    print("  [UNDER-ENROLL]  BUS101 (sem1) / PHYS101 (sem2)  demo_student1 + eve = 2 students")
-    print("                  → cancels when advancing to running → UC-19 special reg for demo_student1")
-    print("  [UC-18 BLOCK]   SOC101 (sem1) / SOC201 (sem2)  same Fri slot as ENG101/ENG201")
-    print("                  demo_student2 enrolled here → causes conflict block on waitlist admit")
-    print("")
-    print("Semesters 3-6: all normal, 3-5 background students enrolled per course, no edge cases.")
+    print("\nSemesters:")
+    print("  Fall 2025   — grading period, 10 courses, grades submitted")
+    print("  Spring 2026 — setup period, 10 courses, LIVE DEMO")
+    print("\nSpring 2026 scenario map:")
+    print("  [NORMAL]   CS101, MATH101    — open seats")
+    print("  [CANCEL]   CS201, MATH201    — only 2 enrolled, will cancel")
+    print("  [WAITLIST] CS301, ENG101     — cap=5, full + 3 on waitlist")
+    print("  [CONFLICT] CS401 & CS450     — same Mon/Wed 9am (Smith)")
+    print("  [CONFLICT] PHYS101 & PHYS201 — same Tue/Thu 11am (Jones)")
