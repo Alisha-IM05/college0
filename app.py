@@ -18,7 +18,7 @@ from modules.conduct import (
     get_pending_complaints, resolve_student_complaint, resolve_instructor_complaint,
     get_taboo_words, add_taboo_word, remove_taboo_word,
     get_user_warnings, get_warning_count, issue_warning,
-    seed_conduct_data, mark_fine_paid
+    seed_conduct_data, mark_fine_paid, dismiss_complaint
 )
 from modules.semester import (
     advance_period, create_course, register_student,
@@ -1305,6 +1305,21 @@ def resolve_instructor_complaint_route(complaint_id):
                         message=message,
                         message_type=status)
 
+#dismiss
+@app.route('/complaints/dismiss/<int:complaint_id>', methods=['POST'])
+def dismiss_complaint_route(complaint_id):
+    if 'user_id' not in session or session['role'] != 'registrar':
+        return redirect(url_for('home'))
+    result = dismiss_complaint(complaint_id)
+    status, message = result.split(':', 1)
+    complaints = get_pending_complaints()
+    return render_template('conduct/complaints.html',
+                           complaints=complaints,
+                           role='registrar',
+                           username=session['username'],
+                           all_users=[],
+                           message=message,
+                           message_type=status)
 
 # ── TABOO WORDS (registrar only) ──────────────────────────────────────────────
 

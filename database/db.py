@@ -40,6 +40,8 @@ def seed_data():
     print("Existing data cleared.")
 
     # ── USERS ─────────────────────────────────────────────────────────────────
+    # 1 registrar, 3 instructors (prof_demo is demo-accessible),
+    # 10 students (demo_student1 & demo_student2 are demo-accessible)
     users = [
         ('registrar1',    'registrar1@college0.com',  'password123', 'registrar'),
         ('prof_smith',    'smith@college0.com',        'password123', 'instructor'),
@@ -73,13 +75,34 @@ def seed_data():
         row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         return row['id'] if row else None
 
-    smith_id = uid('prof_smith')
-    jones_id = uid('prof_jones')
+    demo_prof_id = uid('prof_demo')
+    smith_id     = uid('prof_smith')
+    jones_id     = uid('prof_jones')
+    demo1_id     = uid('demo_student1')
+    demo2_id     = uid('demo_student2')
+    alice_id     = uid('alice')
+    bob_id       = uid('bob')
+    carol_id     = uid('carol')
+    david_id     = uid('david')
+    eve_id       = uid('eve')
+    frank_id     = uid('frank')
+    grace_id     = uid('grace')
+    henry_id     = uid('henry')
 
-    # ── SPRING 2026 SEMESTER ──────────────────────────────────────────────────
-    conn.execute(
-        "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (1, 'Spring 2026', 'setup')"
-    )
+    # ── SIX SEMESTERS (all start at setup) ───────────────────────────────────
+    semesters = [
+        (1, 'Fall 2024',   'setup'),
+        (2, 'Spring 2025', 'setup'),
+        (3, 'Summer 2025', 'setup'),
+        (4, 'Fall 2025',   'setup'),
+        (5, 'Spring 2026', 'setup'),
+        (6, 'Fall 2026',   'setup'),
+    ]
+    for sem_id, name, period in semesters:
+        conn.execute(
+            "INSERT OR IGNORE INTO semesters (id, name, current_period) VALUES (?, ?, ?)",
+            (sem_id, name, period)
+        )
     conn.commit()
 
     # ── SPRING 2026 COURSES ───────────────────────────────────────────────────
@@ -118,7 +141,8 @@ def seed_data():
 
     def cid(name):
         row = conn.execute(
-            "SELECT id FROM courses WHERE course_name = ? AND semester_id = 1", (name,)
+            "SELECT id FROM courses WHERE course_name = ? AND semester_id = ?",
+            (course_name, sem_id)
         ).fetchone()
         return row['id'] if row else None
 
@@ -239,6 +263,7 @@ if __name__ == "__main__":
     print("Login at http://127.0.0.1:5000")
     print("\nAccounts (all password: password123):")
     print("  registrar1    — registrar")
+    print("  prof_demo     — demo instructor (2 courses per semester)")
     print("  prof_smith    — instructor")
     print("  prof_jones    — instructor")
     print("  demo_student1 — FRESHMAN: 0 credits, NOT enrolled (enroll live)")

@@ -29,7 +29,7 @@ export function Home(): React.ReactElement {
 
       {/* ── NAVBAR ── */}
       <div className="navbar">
-        <h1>College<span style={{ color: '#93c5fd' }}>0</span></h1>
+        <h1 style={{ color: 'white', textShadow: '0 1px 3px rgba(0,0,0,.3)' }}>College<span style={{ color: '#fbbf24' }}>0</span></h1>
         <div>
           <a href="/login">Sign In</a>
           <a href="/apply" style={{ marginLeft: 16, background: 'white', color: '#2E4A7A', padding: '6px 16px', borderRadius: 6, fontWeight: 600 }}>Apply</a>

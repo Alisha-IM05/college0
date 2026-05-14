@@ -294,9 +294,9 @@ tbody tr:hover td { background: #f8faff; }
   display: inline-flex;
   align-items: center;
   gap: .5rem;
-  background: rgba(255,255,255,.15);
-  color: white;
-  border: 1px solid rgba(255,255,255,.25);
+  background: rgba(46,74,122,.1);
+  color: #2E4A7A;
+  border: 1px solid #c8d3e8;
   padding: 6px 14px;
   border-radius: 99px;
   font-size: 0.82rem;
