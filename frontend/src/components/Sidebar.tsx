@@ -77,8 +77,7 @@ export function Sidebar({ username, role, activePage }: SidebarProps): React.Rea
           <SidebarLink href="/instructor/courses" icon="📚" label="My Courses" active={activePage === 'instructor_courses'} />
           <SidebarLink href="/warnings" icon="⚠️" label="Warnings" active={activePage === 'warnings'} />
           <SidebarLink href="/complaints" icon="📢" label="Complaints" active={activePage === 'complaints'} />
-          <SidebarLink href="/flagged-gpas" icon="🚩" label="GPA Review" active={activePage === 'flagged_gpas'} />
-          <SidebarLink href="/flagged-gpas" icon="⚠️" label="Flagged GPAs" active={activePage === 'flagged_gpas'} />
+          <SidebarLink href="/flagged-gpas" icon="🚩" label="Flagged GPAs" active={activePage === 'flagged_gpas'} />
 
         </>}
 
