@@ -81,6 +81,7 @@ _PAGE_TITLES = {
     'ai_assistant':      'College0 — AI Assistant',
     'suspended':         'College0 — Account Suspended',
     'account_blocked':   'College0 — Account inactive',
+    'flagged_gpas':      'College0 — Flagged Course GPAs',
 }
 
 
@@ -1161,10 +1162,12 @@ def graduation_resolve_page():
         return redirect(url_for('home'))
     conn = get_db()
     applications = conn.execute(
-        """SELECT ga.*, u.username, s.credits_earned
+        """SELECT ga.*, u.username,
+           (SELECT COUNT(*) FROM grades g
+            JOIN enrollments e ON g.student_id = e.student_id AND g.course_id = e.course_id
+            WHERE g.student_id = ga.student_id AND g.letter_grade != 'F') as credits_earned
            FROM graduation_applications ga
            JOIN users u ON ga.student_id = u.id
-           JOIN students s ON ga.student_id = s.id
            WHERE ga.status = 'pending'"""
     ).fetchall()
     conn.close()
@@ -1320,10 +1323,10 @@ def flagged_gpas_page():
         conn.close()
         return redirect(url_for('home'))
     conn.close()
-    return render_template('semester/flagged_gpas.html',
-                           flags=flags,
-                           role=session['role'],
-                           username=session['username'])
+    return render_react('flagged_gpas',
+                        username=session['username'],
+                        role=session['role'],
+                        flags=_rows_to_dicts(flags))
 
 
 @app.route('/flagged-gpas/justify/<int:flag_id>', methods=['POST'])

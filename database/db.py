@@ -119,6 +119,7 @@ def seed_data():
         ('ENG100 - Academic Writing', 'Mon/Wed', 1, '14:00', '15:30', 10, jones_id),
         ('PHYS100 - Physics I',       'Tue/Thu', 3, '14:00', '15:30', 10, jones_id),
         ('HIST100 - World History',   'Fri',     5, '11:00', '12:30', 10, jones_id),
+        ('Fail Retake Test',              'Mon/Wed', 1,  '08:00', '08:00',  5,  jones_id),
     ]
     for name, slot, day, start, end, cap, inst_id in fall_courses:
         conn.execute(
@@ -213,6 +214,7 @@ def seed_data():
         ('ENG101 - English Comp',      'Mon/Wed', 1, '14:00', '15:30',  5, jones_id),
         ('PHYS101 - Physics I',        'Tue/Thu', 3, '11:00', '12:30', 10, jones_id),
         ('PHYS201 - Physics II',       'Tue/Thu', 3, '11:00', '12:30', 10, jones_id),
+        ('Fail Retake Test',              'Mon/Wed', 1,  '08:00', '08:00',  5,  jones_id),
     ]
     for name, slot, day, start, end, cap, inst_id in spring_courses:
         conn.execute(

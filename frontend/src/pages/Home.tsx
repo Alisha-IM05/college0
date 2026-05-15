@@ -137,6 +137,55 @@ export function Home(): React.ReactElement {
         </div>
       </div>
 
+{/* ── RATINGS & GPA ── */}
+      <div style={{ maxWidth: 900, margin: '0 auto 40px', padding: '0 40px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
+
+          {/* Highest Rated */}
+          <div style={{ background: 'white', borderRadius: 10, boxShadow: '0 2px 8px rgba(0,0,0,.08)', padding: '20px 24px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', color: '#64748b', marginBottom: 12 }}>⭐ Highest Rated Classes</div>
+            {(data.highest_rated || []).length > 0 ? (data.highest_rated || []).map((c: any, i: number) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < (data.highest_rated || []).length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#1a202c' }}>{c.course_name?.split(' - ')[0] || c.course_name}</div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{c.course_name?.split(' - ')[1] || ''}</div>
+                </div>
+                <div style={{ fontWeight: 700, color: '#f59e0b', fontSize: 15 }}>{c.avg_rating}</div>
+              </div>
+            )) : <p style={{ color: '#94a3b8', fontSize: 13 }}>No reviews yet.</p>}
+          </div>
+
+          {/* Lowest Rated */}
+          <div style={{ background: 'white', borderRadius: 10, boxShadow: '0 2px 8px rgba(0,0,0,.08)', padding: '20px 24px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', color: '#64748b', marginBottom: 12 }}>📉 Lowest Rated Classes</div>
+            {(data.lowest_rated || []).length > 0 ? (data.lowest_rated || []).map((c: any, i: number) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < (data.lowest_rated || []).length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#1a202c' }}>{c.course_name?.split(' - ')[0] || c.course_name}</div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{c.course_name?.split(' - ')[1] || ''}</div>
+                </div>
+                <div style={{ fontWeight: 700, color: '#ef4444', fontSize: 15 }}>{c.avg_rating}</div>
+              </div>
+            )) : <p style={{ color: '#94a3b8', fontSize: 13 }}>No reviews yet.</p>}
+          </div>
+
+          {/* Top GPA Students */}
+          <div style={{ background: 'white', borderRadius: 10, boxShadow: '0 2px 8px rgba(0,0,0,.08)', padding: '20px 24px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', color: '#64748b', marginBottom: 12 }}>🏆 Highest GPA Students</div>
+            {(data.top_students || []).length > 0 ? (data.top_students || []).map((s: any, i: number) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < (data.top_students || []).length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#1a202c' }}>{s.username}</div>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{s.status === 'probation' ? 'Probation' : 'Good Standing'}</div>
+                </div>
+                <div style={{ fontWeight: 700, color: '#15803d', fontSize: 15 }}>{Number(s.cumulative_gpa).toFixed(2)}</div>
+              </div>
+            )) : <p style={{ color: '#94a3b8', fontSize: 13 }}>No GPA data yet.</p>}
+          </div>
+
+        </div>
+      </div>
+
       {/* ── FOOTER ── */}
       <div style={{ borderTop: '1px solid #e2e8f0', padding: '24px 40px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
         College0 · CCNY Software Engineering · Group E
