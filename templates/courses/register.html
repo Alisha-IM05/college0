@@ -42,7 +42,7 @@
 
         {% if message and semester and semester['current_period'] == 'registration' %}
             {% if 'conflict' in message.lower() %}
-            <div class="error">⛔ {{ message }}</div>
+            <div class="error"> {{ message }}</div>
             {% else %}
             <div class="message">{{ message }}</div>
             {% endif %}
@@ -51,13 +51,13 @@
         {% if semester and semester['current_period'] == 'registration' and role == 'student' %}
             {% set enrolled_count = enrolled | length %}
             {% if enrolled_count == 0 %}
-                <div class="warning">⚠️ You are not registered for any courses. You must register for at least 2 before registration closes.</div>
+                <div class="warning"> You are not registered for any courses. You must register for at least 2 before registration closes.</div>
             {% elif enrolled_count == 1 %}
-                <div class="warning">⚠️ You are registered for 1 course. You need at least 1 more before registration closes.</div>
+                <div class="warning"> You are registered for 1 course. You need at least 1 more before registration closes.</div>
             {% elif enrolled_count >= 4 %}
-                <div class="warning">⚠️ You have reached the maximum of 4 courses.</div>
+                <div class="warning"> You have reached the maximum of 4 courses.</div>
             {% else %}
-                <div class="message">✅ You are registered for {{ enrolled_count }} course(s). You can register for up to {{ 4 - enrolled_count }} more.</div>
+                <div class="message"> You are registered for {{ enrolled_count }} course(s). You can register for up to {{ 4 - enrolled_count }} more.</div>
             {% endif %}
         {% endif %}
 
@@ -145,13 +145,13 @@
             {% else %}
             <div class="warning">
                 {% if semester and semester['current_period'] == 'setup' %}
-                    🔧 The semester is opening soon. Please wait for registration to open.
+                     The semester is opening soon. Please wait for registration to open.
                 {% elif semester and semester['current_period'] == 'running' %}
-                    📖 Classes are in session. Registration is closed.
+                     Classes are in session. Registration is closed.
                 {% elif semester and semester['current_period'] == 'grading' %}
-                    ✅ Grading period is active. Registration is closed.
+                     Grading period is active. Registration is closed.
                 {% else %}
-                    ⚠️ Registration is not currently open.
+                     Registration is not currently open.
                 {% endif %}
             </div>
             {% endif %}
@@ -173,11 +173,11 @@
                 <td>{{ w['position'] }}</td>
                 <td>
                     {% if w['status'] == 'admitted' %}
-                        ✅ Admitted — check your schedule
+                         Admitted — check your schedule
                     {% elif w['status'] == 'denied' %}
-                        ❌ Denied by instructor
+                         Denied by instructor
                     {% else %}
-                        ⏳ Pending
+                         Pending
                     {% endif %}
                 </td>
             </tr>
@@ -185,7 +185,7 @@
         </table>
         {% endif %}
         {% if role == 'student' and cancelled_courses and semester and semester['current_period'] in ['special_registration', 'running', 'grading'] %}
-        <h3>⚠️ Cancelled Courses</h3>
+        <h3> Cancelled Courses</h3>
         <table>
             <tr>
                 <th>Course</th>
@@ -198,7 +198,7 @@
                 <td>{{ course['course_name'] }}</td>
                 <td>{{ course['time_slot'] }} {{ course['start_time'] }}-{{ course['end_time'] }}</td>
                 <td>{{ course['instructor_name'] or 'TBA' }}</td>
-                <td style="color:#cc0000;font-weight:bold;">❌ Cancelled due to low enrollment</td>
+                <td style="color:#cc0000;font-weight:bold;"> Cancelled due to low enrollment</td>
             </tr>
             {% endfor %}
         </table>
